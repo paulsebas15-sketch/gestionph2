@@ -1,0 +1,231 @@
+// datos.js — Estructuras de datos en memoria y construcción del snapshot
+// GestiónPH v2.0
+// Depende de: config.js
+
+// ─── ESTADO EN MEMORIA (fuente única de verdad en runtime) ──
+const DATA = {
+  conjuntos: { def: [], pro: [] },
+  usuarios: [],
+  cedulas: {},
+  cedActivos: {},
+  tareasRec: [],
+  tareasEve: [],
+  deletedEveIds: [],
+  tareasArchivo: [],
+  tareasAV: [],
+  eventosCalendario: []
+};
+
+let ESTADO = {};       // ESTADO[conjunto][mes][tareaIdx][slotIdx] = { done, ts, tsManual, foto, undoneAt }
+let REC_COMS = {};     // REC_COMS[conjunto][tareaIdx] = [comentarios...]
+let EVAL_MANUAL = {};  // EVAL_MANUAL[conjunto][mes] = { tareas, cartera, asistencia }
+// FECHAS_LIMITE_REC[conjunto][mes][tareaIdx] = "DD/MM" — fecha real por conjunto (usada solo
+// por "Reunión de consejo de adm.", sincronizada automáticamente desde Calendario, ya que esa
+// sí varía de un conjunto a otro).
+let FECHAS_LIMITE_REC = {};
+// FECHAS_LIMITE_REC_GLOBAL[mes][tareaNombre] = "DD/MM" — fecha ÚNICA compartida por TODOS los
+// conjuntos (las 6 tareas con fechaVariable:true tienen la misma fecha límite sin importar el
+// conjunto, ej. "día 10 de cada mes" aplica igual a los 11 — se fija una sola vez en Admin en
+// vez de repetirlo conjunto por conjunto).
+let FECHAS_LIMITE_REC_GLOBAL = {};
+
+function getFechaLimiteRecGlobal(mes, tareaNombre) {
+  return (FECHAS_LIMITE_REC_GLOBAL[mes] && FECHAS_LIMITE_REC_GLOBAL[mes][tareaNombre]) || null;
+}
+
+function setFechaLimiteRecGlobal(mes, tareaNombre, fechaCorta) {
+  FECHAS_LIMITE_REC_GLOBAL[mes] = FECHAS_LIMITE_REC_GLOBAL[mes] || {};
+  FECHAS_LIMITE_REC_GLOBAL[mes][tareaNombre] = fechaCorta;
+}
+
+// Fecha efectiva de una tarea recurrente para mostrar/comparar: global compartida si tiene
+// fechaVariable:true (las 6 confirmadas), o la fecha por-conjunto sincronizada desde Calendario
+// en caso contrario (hoy solo aplica a "Reunión de consejo de adm.").
+function obtenerFechaTareaRec(conjunto, mes, tarea) {
+  if (tarea.fechaVariable) return getFechaLimiteRecGlobal(mes, tarea.n);
+  return getFechaLimiteRec(conjunto, mes, tarea._idx);
+}
+
+let _fbDataReceived = false; // true tras el primer snapshot real de Firebase (evita pisar Firebase con datos vacíos)
+let pendingSync = false;
+let _restoringUntil = 0;
+
+// ─── HELPERS DE ACCESO ───────────────────────────────────────
+
+// Lista de todos los conjuntos activos (def + pro) como array plano de objetos.
+// Los "eliminados" (soft-delete, ver admin.js eliminarConjunto) se excluyen para no
+// perder su historial de evaluaciones/tareas, pero ya no aparecen en la app activa.
+function todosLosConjuntos() {
+  return [...(DATA.conjuntos.def || []), ...(DATA.conjuntos.pro || [])].filter(c => !c.deleted);
+}
+
+function conjuntoPorNombre(nombre) {
+  return todosLosConjuntos().find(c => c.n === nombre);
+}
+
+// Conjuntos visibles para un usuario según su rol
+function conjuntosVisibles(usuario) {
+  if (!usuario) return [];
+  if (usuario.rol === 'staff') return todosLosConjuntos().map(c => c.n);
+  return usuario.conjuntos || [];
+}
+
+function usuarioPorNombre(nombre) {
+  return DATA.usuarios.find(u => u.n === nombre);
+}
+
+function tareaRecActiva(tarea, mes) {
+  if (tarea.deleted) return false;
+  if (tarea.bimestral && !esMesImpar(mes)) return false;
+  return true;
+}
+
+// Tareas recurrentes aplicables a un conjunto (por tipo def/pro) y mes (por regla bimestral)
+function tareasRecPara(conjuntoNombre, mes) {
+  const c = conjuntoPorNombre(conjuntoNombre);
+  if (!c) return [];
+  const tipo = (DATA.conjuntos.def || []).includes(c) ? 'Definitivos' : 'Provisional (A&V)';
+  return DATA.tareasRec
+    .map((t, idx) => ({ ...t, _idx: idx }))
+    .filter(t => tareaRecActiva(t, mes))
+    .filter(t => t.aplica === 'Todos' || t.aplica === tipo);
+}
+
+function ensureEstadoSlot(conjunto, mes, tareaIdx, slotIdx = 0) {
+  ESTADO[conjunto] = ESTADO[conjunto] || {};
+  ESTADO[conjunto][mes] = ESTADO[conjunto][mes] || {};
+  ESTADO[conjunto][mes][tareaIdx] = ESTADO[conjunto][mes][tareaIdx] || {};
+  ESTADO[conjunto][mes][tareaIdx][slotIdx] = ESTADO[conjunto][mes][tareaIdx][slotIdx] || { done: false, ts: null, tsManual: null, foto: null };
+  return ESTADO[conjunto][mes][tareaIdx][slotIdx];
+}
+
+function ensureRecComs(conjunto, tareaIdx) {
+  REC_COMS[conjunto] = REC_COMS[conjunto] || {};
+  REC_COMS[conjunto][tareaIdx] = REC_COMS[conjunto][tareaIdx] || [];
+  return REC_COMS[conjunto][tareaIdx];
+}
+
+function getFechaLimiteRec(conjunto, mes, tareaIdx) {
+  return (FECHAS_LIMITE_REC[conjunto] && FECHAS_LIMITE_REC[conjunto][mes] && FECHAS_LIMITE_REC[conjunto][mes][tareaIdx]) || null;
+}
+
+function setFechaLimiteRec(conjunto, mes, tareaIdx, fechaCorta) {
+  FECHAS_LIMITE_REC[conjunto] = FECHAS_LIMITE_REC[conjunto] || {};
+  FECHAS_LIMITE_REC[conjunto][mes] = FECHAS_LIMITE_REC[conjunto][mes] || {};
+  FECHAS_LIMITE_REC[conjunto][mes][tareaIdx] = fechaCorta;
+}
+
+// Al crear una nueva tarea recurrente: inicializar slots vacíos para todos los conjuntos existentes.
+// Crea un slot por cada repetición mensual (tarea.veces, por defecto 1).
+function inicializarSlotsNuevaTareaRec(tareaIdx) {
+  const tarea = DATA.tareasRec[tareaIdx];
+  const veces = (tarea && tarea.veces) || 1;
+  todosLosConjuntos().forEach(c => {
+    MESES.forEach(mes => {
+      for (let s = 0; s < veces; s++) ensureEstadoSlot(c.n, mes, tareaIdx, s);
+    });
+    ensureRecComs(c.n, tareaIdx);
+  });
+}
+
+// ─── IDs DE TAREAS EVENTUALES ─────────────────────────────────
+function siguienteIdEventual() {
+  const nums = DATA.tareasEve
+    .map(t => parseInt((t.id || '').replace('T-', ''), 10))
+    .filter(n => !isNaN(n));
+  const archivadas = DATA.tareasArchivo
+    .map(t => parseInt((t.id || '').replace('T-', ''), 10))
+    .filter(n => !isNaN(n));
+  const max = Math.max(0, ...nums, ...archivadas);
+  return `T-${String(max + 1).padStart(3, '0')}`;
+}
+
+function siguienteIdAV() {
+  const nums = DATA.tareasAV
+    .map(t => parseInt((t.id || '').replace('AV-', ''), 10))
+    .filter(n => !isNaN(n));
+  const max = Math.max(0, ...nums);
+  return `AV-${String(max + 1).padStart(3, '0')}`;
+}
+
+function siguienteIdEvento() {
+  const nums = DATA.eventosCalendario
+    .map(e => parseInt((e.id || '').replace('EV-', ''), 10))
+    .filter(n => !isNaN(n));
+  const max = Math.max(0, ...nums);
+  return `EV-${String(max + 1).padStart(3, '0')}`;
+}
+
+// ─── SNAPSHOT (para Firebase / backup) ───────────────────────
+function buildSnapshot() {
+  return {
+    ts: Date.now(),
+    dataVersion: DATA_VERSION,
+    conjuntos: DATA.conjuntos,
+    usuarios: DATA.usuarios,
+    cedulas: DATA.cedulas,
+    cedActivos: DATA.cedActivos,
+    tareasRec: DATA.tareasRec,
+    estado: ESTADO,
+    recComs: REC_COMS,
+    tareasEve: DATA.tareasEve,
+    deletedEveIds: DATA.deletedEveIds,
+    tareasArchivo: DATA.tareasArchivo,
+    tareasAV: DATA.tareasAV,
+    evalManual: EVAL_MANUAL,
+    fechasLimiteRec: FECHAS_LIMITE_REC,
+    fechasLimiteRecGlobal: FECHAS_LIMITE_REC_GLOBAL,
+    eventosCalendario: DATA.eventosCalendario
+  };
+}
+
+// Aplica un snapshot completo al estado en memoria (usado por restore de backup, sección 6.4)
+function aplicarSnapshotDirecto(snap) {
+  DATA.conjuntos = snap.conjuntos || { def: [], pro: [] };
+  DATA.usuarios = snap.usuarios || [];
+  DATA.cedulas = snap.cedulas || {};
+  DATA.cedActivos = snap.cedActivos || {};
+  DATA.tareasRec = snap.tareasRec || [];
+  DATA.tareasEve = snap.tareasEve || [];
+  DATA.deletedEveIds = snap.deletedEveIds || [];
+  DATA.tareasArchivo = snap.tareasArchivo || [];
+  DATA.tareasAV = snap.tareasAV || [];
+  DATA.eventosCalendario = snap.eventosCalendario || [];
+  REC_COMS = snap.recComs || {};
+  EVAL_MANUAL = snap.evalManual || {};
+  FECHAS_LIMITE_REC = snap.fechasLimiteRec || {};
+  FECHAS_LIMITE_REC_GLOBAL = snap.fechasLimiteRecGlobal || {};
+  // ESTADO deliberadamente NO se restaura desde backup (regla 6.4.4) — se mantiene el ESTADO actual
+}
+
+// ─── PERSISTENCIA LOCAL ───────────────────────────────────────
+// Si esto falla (ej. localStorage lleno) el progreso NO queda guardado — antes fallaba en
+// silencio (solo console.error); ahora se avisa explícitamente para no perder trabajo sin
+// que el usuario se entere.
+function guardarLocal() {
+  try {
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(buildSnapshot()));
+  } catch (e) {
+    console.error('Error guardando en localStorage', e);
+    if (typeof toast === 'function') toast('⚠️ No se pudo guardar localmente — revisa el espacio disponible del navegador', 6000);
+  }
+}
+
+function cargarLocal() {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (!raw) return false;
+    const snap = JSON.parse(raw);
+    aplicarSnapshotDesdeLocal(snap);
+    return true;
+  } catch (e) {
+    console.error('Error leyendo localStorage', e);
+    return false;
+  }
+}
+
+// Igual que aplicarSnapshotDirecto pero SÍ carga ESTADO (arranque desde cero local, no es un "restore")
+function aplicarSnapshotDesdeLocal(snap) {
+  aplicarSnapshotDirecto(snap);
+  ESTADO = snap.estado || {};
+}
