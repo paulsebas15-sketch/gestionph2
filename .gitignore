@@ -1,0 +1,9 @@
+# Backups y datos reales — nunca deben subirse al repositorio público
+*.json
+!package.json
+gestionph_backup_*
+data_migracion*
+
+# Sistema
+.DS_Store
+Thumbs.db
