@@ -2,16 +2,15 @@
 // GestiónPH v2.0 · A&V Victoria Pineda Administraciones
 
 // ─── FIREBASE ───────────────────────────────────────────────
-// ⚠️ PLACEHOLDER — reemplazar con las credenciales reales del proyecto Firebase v2
-// creado en https://console.firebase.google.com (Realtime Database)
+// Proyecto real: gestion-ph-ayv-2 (Realtime Database + Storage)
 const FIREBASE_CONFIG = {
-  apiKey: "REEMPLAZAR_API_KEY",
-  authDomain: "REEMPLAZAR.firebaseapp.com",
-  databaseURL: "https://REEMPLAZAR-default-rtdb.firebaseio.com",
-  projectId: "REEMPLAZAR",
-  storageBucket: "REEMPLAZAR.appspot.com",
-  messagingSenderId: "REEMPLAZAR",
-  appId: "REEMPLAZAR"
+  apiKey: "AIzaSyCNsOShv5331I7P_Av-frQk_nqH3MBout4",
+  authDomain: "gestion-ph-ayv-2.firebaseapp.com",
+  databaseURL: "https://gestion-ph-ayv-2-default-rtdb.firebaseio.com",
+  projectId: "gestion-ph-ayv-2",
+  storageBucket: "gestion-ph-ayv-2.firebasestorage.app",
+  messagingSenderId: "19543863402",
+  appId: "1:19543863402:web:fb3eeea978526d3cc01a13"
 };
 
 const DB_PATH = 'gestionph';           // nodo raíz en Firebase
