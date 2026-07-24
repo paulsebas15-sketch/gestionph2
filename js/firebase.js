@@ -25,6 +25,10 @@ function initFirebase() {
       FB_STORAGE = firebase.storage();
       FB_FOTOS_REF = firebase.database().ref(DB_FOTOS);
       FB_FOTOS_REF.on('value', onFotosSnapshot);
+      firebase.database().ref(DB_CONTADOR_FOTOS).on('value', snap => {
+        CONTADOR_FOTOS_BYTES = snap.val() || 0;
+        if (PESTANA_ACTUAL === 'admin' && typeof renderAdmin === 'function') renderAdmin();
+      });
     }
     window.addEventListener('online', () => {
       if (pendingSync) forceSyncMerge();
@@ -39,6 +43,13 @@ function initFirebase() {
 // verFotoRecurrente() las muestre junto a las locales de este navegador. Cada foto se guarda
 // en Firebase con clave plana "tareaIdx_slotIdx_fotoCount" (ver subirFotoAFirebase en
 // recurrentes.js) — aquí se reagrupan por tareaIdx_slotIdx para juntarlas.
+// Suma (delta positivo) o resta (delta negativo) bytes del contador de fotos — usa transaction()
+// para que subidas simultáneas desde 2 dispositivos no se pisen entre sí
+function ajustarContadorFotos(deltaBytes) {
+  if (!FB_STORAGE) return;
+  firebase.database().ref(DB_CONTADOR_FOTOS).transaction(actual => Math.max(0, (actual || 0) + deltaBytes));
+}
+
 function onFotosSnapshot(snapshot) {
   const remoto = snapshot.val();
   if (!remoto || typeof FOTOS_REMOTAS === 'undefined') return;

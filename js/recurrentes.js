@@ -173,6 +173,9 @@ let FOTOS_LOCAL = {};
 // Metadatos de fotos subidas por CUALQUIER dispositivo, traídos por el listener de Firebase
 // (ver onFotosSnapshot en firebase.js) — clave igual a FOTOS_LOCAL, valor {url, nombre, ts}
 let FOTOS_REMOTAS = {};
+// Suma de bytes de todas las fotos en Storage — alimentado por el listener en firebase.js,
+// usado para la barra de uso en Admin
+let CONTADOR_FOTOS_BYTES = 0;
 
 function cargarFotosLocal() {
   try {
@@ -211,43 +214,70 @@ function adjuntarFotoRecurrente(conjunto, mes, tareaIdx) {
   input.onchange = () => {
     const file = input.files[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const slot = ensureEstadoSlot(conjunto, mes, tareaIdx, slotIdx);
-      slot.hasFoto = true;
-      slot.fotoCount = (slot.fotoCount || 0) + 1;
+    comprimirImagen(file).then(blob => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const slot = ensureEstadoSlot(conjunto, mes, tareaIdx, slotIdx);
+        slot.hasFoto = true;
+        slot.fotoCount = (slot.fotoCount || 0) + 1;
 
-      const key = claveFoto(conjunto, mes, tareaIdx, slotIdx);
-      FOTOS_LOCAL[key] = FOTOS_LOCAL[key] || [];
-      // Mientras no haya confirmación de Firebase, se ve localmente con el base64 (reader.result);
-      // si sube bien, subirFotoAFirebase() reemplaza esta entrada por la versión con url real
-      FOTOS_LOCAL[key].push({ data: reader.result, nombre: file.name, ts: tsCol() });
-      guardarFotosLocal();
+        const key = claveFoto(conjunto, mes, tareaIdx, slotIdx);
+        FOTOS_LOCAL[key] = FOTOS_LOCAL[key] || [];
+        // Mientras no haya confirmación de Firebase, se ve localmente con el base64 (reader.result);
+        // si sube bien, subirFotoAFirebase() reemplaza esta entrada por la versión con url real
+        FOTOS_LOCAL[key].push({ data: reader.result, nombre: file.name, ts: tsCol() });
+        guardarFotosLocal();
 
-      subirFotoAFirebase(conjunto, mes, tareaIdx, slotIdx, slot.fotoCount, file, reader.result);
+        subirFotoAFirebase(conjunto, mes, tareaIdx, slotIdx, slot.fotoCount, blob, file.name);
 
-      toast('📷 Foto adjuntada');
-      programarAutoSave();
-      renderRecurrentes();
-    };
-    reader.readAsDataURL(file);
+        toast('📷 Foto adjuntada');
+        programarAutoSave();
+        renderRecurrentes();
+      };
+      reader.readAsDataURL(blob);
+    });
   };
   input.click();
+}
+
+// Redimensiona y comprime una foto ANTES de subirla — reduce el consumo de Storage hasta ~85%
+// sin pérdida visible para evidencia fotográfica (regla del usuario, ver análisis de capacidad).
+// Si algo falla (formato raro, navegador viejo), se sube el archivo original sin comprimir.
+function comprimirImagen(file, maxAncho = FOTO_MAX_ANCHO, calidad = FOTO_CALIDAD) {
+  return new Promise(resolve => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      let w = img.width, h = img.height;
+      if (w > maxAncho) { h = Math.round(h * maxAncho / w); w = maxAncho; }
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      canvas.toBlob(blob => {
+        URL.revokeObjectURL(url);
+        resolve(blob || file);
+      }, 'image/jpeg', calidad);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
 }
 
 // El archivo real (imagen) se sube a Firebase Storage (no a Realtime Database — evita inflar
 // el payload principal y es el servicio hecho para esto). Solo la URL resultante + metadatos
 // livianos se guardan en gestionph_fotos/ de Realtime Database, que sí se puede "escuchar" en
 // tiempo real para que otros dispositivos se enteren de fotos nuevas (Storage no tiene eso).
-function subirFotoAFirebase(conjunto, mes, tareaIdx, slotIdx, fotoCount, file, dataUrlLocal) {
+function subirFotoAFirebase(conjunto, mes, tareaIdx, slotIdx, fotoCount, blob, nombreOriginal) {
   if (!FB_STORAGE || !FB_FOTOS_REF) return; // Firebase aún no conectado — se queda solo local
   const rutaArchivo = `${DB_FOTOS}/${conjunto}/${mes}/${tareaIdx}_${slotIdx}_${fotoCount}`.replace(/\s+/g, '_');
-  FB_STORAGE.ref(rutaArchivo).put(file)
+  FB_STORAGE.ref(rutaArchivo).put(blob)
     .then(snapshot => snapshot.ref.getDownloadURL())
     .then(url => {
-      const meta = { url, nombre: file.name, ts: tsCol() };
+      const meta = { url, nombre: nombreOriginal, ts: tsCol(), bytes: blob.size };
       return firebase.database().ref(`${DB_FOTOS}/${conjunto}/${mes}/${tareaIdx}_${slotIdx}_${fotoCount}`).set(meta);
     })
+    .then(() => ajustarContadorFotos(blob.size))
     .catch(err => console.error('Error subiendo foto a Firebase Storage', err));
 }
 

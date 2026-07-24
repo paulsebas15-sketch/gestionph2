@@ -16,6 +16,11 @@ const FIREBASE_CONFIG = {
 
 const DB_PATH = 'gestionph';           // nodo raíz en Firebase
 const DB_FOTOS = 'gestionph_fotos';    // fotos separadas (no infla el payload principal)
+const DB_CONTADOR_FOTOS = 'contadores/fotosBytes'; // suma de bytes subidos a Storage, para la barra de uso
+const LIMITE_DATOS_MB = 1024;   // 1GB — límite gratis de Realtime Database (plan Spark)
+const LIMITE_FOTOS_MB = 5120;   // 5GB — límite gratis de Storage (plan Blaze, antes de cobrar)
+const FOTO_MAX_ANCHO = 1600;    // px — ancho máximo al comprimir fotos antes de subir
+const FOTO_CALIDAD = 0.7;       // calidad JPEG al comprimir (0-1)
 const DATA_VERSION = 20260721;
 const SAVE_DELAY = 600;                // ms debounce autoSave
 const FB_RENDER_DELAY = 800;           // ms throttle re-render tras snapshot remoto

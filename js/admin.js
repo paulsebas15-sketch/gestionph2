@@ -2,6 +2,22 @@
 // GestiónPH v2.0
 // Depende de: config.js, datos.js, ui.js, firebase.js
 
+function renderBarraCapacidad(etiqueta, usadoMB, limiteMB) {
+  const pct = limiteMB > 0 ? Math.min(100, Math.round((usadoMB / limiteMB) * 100)) : 0;
+  const color = pct >= 90 ? 'var(--rj)' : (pct >= 70 ? 'var(--nr)' : '#27ae60');
+  const fmt = mb => mb >= 1024 ? `${(mb / 1024).toFixed(2)}GB` : `${mb.toFixed(1)}MB`;
+  return `
+    <div style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px">
+        <span>${etiqueta}</span>
+        <span style="color:var(--txs)">${fmt(usadoMB)} / ${fmt(limiteMB)} (${pct}%)</span>
+      </div>
+      <div style="background:var(--brd);border-radius:4px;height:8px;overflow:hidden">
+        <div style="width:${pct}%;height:100%;background:${color}"></div>
+      </div>
+    </div>`;
+}
+
 function renderAdmin() {
   const cont = document.getElementById('content-admin');
   if (!cont) return;
@@ -10,9 +26,17 @@ function renderAdmin() {
   const aprobadasPendientes = DATA.tareasEve.filter(t => t.est === 'Aprobado').length;
   const archivadas = DATA.tareasArchivo.length;
   const tamanoKB = Math.round(new Blob([JSON.stringify(buildSnapshot())]).size / 1024);
+  const datosMB = tamanoKB / 1024;
+  const fotosMB = CONTADOR_FOTOS_BYTES / (1024 * 1024);
 
   cont.innerHTML = `
     <div class="ibox">⚙️ <strong>Panel de Administración</strong> — Solo gerencia. Gestiona accesos, conjuntos, perfiles y tareas.</div>
+
+    <div class="card">
+      <div class="section-title">📊 Uso de almacenamiento</div>
+      ${renderBarraCapacidad('Datos (Realtime Database)', datosMB, LIMITE_DATOS_MB)}
+      ${renderBarraCapacidad('Fotos (Storage)', fotosMB, LIMITE_FOTOS_MB)}
+    </div>
 
     <div class="card">
       <div class="section-title">📦 Capacidad del sistema</div>
@@ -35,6 +59,16 @@ function renderAdmin() {
         <button class="btn btn-sm" style="background:#4a3f8c;color:white" onclick="document.getElementById('input-migracion').click()">🔄 Migrar backup v1.0 (una sola vez)</button>
         <input type="file" id="input-migracion" accept="application/json" class="oculto" onchange="migrarBackupV1DesdeArchivo(this.files[0])">
         <div style="font-size:9px;color:var(--txs);margin-top:4px">Importa completo un backup exportado desde la app v1.0 (incluye ESTADO de recurrentes). Usar solo una vez, al iniciar v2.0.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">📷 Fotos de tareas recurrentes</div>
+      <div style="font-size:9px;color:var(--txs);margin-bottom:8px">Descarga un histórico en PDF (con las fotos incluidas, separado por conjunto) de los meses anteriores al elegido, y libera espacio borrándolas de Storage. Las casillas marcadas ✓ NO se ven afectadas — solo se elimina la imagen.</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label style="font-size:10px">Borrar fotos anteriores a:</label>
+        <select class="form-input" id="corte-mes-fotos" style="width:auto;padding:4px 8px">${MESES.map(m => `<option ${m === getMes() ? 'selected' : ''}>${m}</option>`).join('')}</select>
+        <button class="btn btn-sm" style="background:#2d6a4f;color:white" onclick="purgarFotosRecurrentes()">📥 Descargar histórico y borrar fotos</button>
       </div>
     </div>
 
@@ -435,6 +469,145 @@ function archivarAprobadas() {
   toast(`📦 ${aprobadas.length} tareas archivadas`);
 }
 
+// Descarga la imagen de una URL remota (Firebase Storage) y la convierte a base64 para poder
+// insertarla en el PDF con jsPDF (addImage necesita base64, no una URL)
+function urlADataURL(url) {
+  return fetch(url)
+    .then(r => r.blob())
+    .then(blob => new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    }))
+    .catch(() => null);
+}
+
+// Descarga un PDF histórico POR CONJUNTO (con las fotos incrustadas) de los meses de Recurrentes
+// anteriores al mes elegido, y tras confirmar, borra esas fotos de Storage para liberar espacio.
+// Las casillas ✓ marcadas NUNCA se tocan — solo se elimina la imagen adjunta.
+async function purgarFotosRecurrentes() {
+  if (typeof window.jspdf === 'undefined') { toast('Librería jsPDF no cargada'); return; }
+  const corte = document.getElementById('corte-mes-fotos').value;
+  const corteIdx = MESES.indexOf(corte);
+  if (corteIdx <= 0) { toast('No hay meses anteriores a ese para purgar'); return; }
+  const mesesAPurgar = MESES.slice(0, corteIdx);
+
+  const conjuntos = todosLosConjuntos();
+  const porConjunto = {};        // conj -> [{tarea, mes, slot, ts, nombre, comentarios, srcPromise}]
+  const paresConFotos = new Set(); // "conjunto|mes" que sí tienen alguna foto (para el borrado)
+
+  toast('Preparando histórico de fotos…');
+
+  conjuntos.forEach(c => {
+    mesesAPurgar.forEach(mes => {
+      tareasRecPara(c.n, mes).forEach(t => {
+        const veces = t.veces || 1;
+        const comentariosTarea = ((REC_COMS[c.n] && REC_COMS[c.n][t._idx]) || []).join(' | ');
+        for (let s = 0; s < veces; s++) {
+          const key = claveFoto(c.n, mes, t._idx, s);
+          const remotas = FOTOS_REMOTAS[key] || [];
+          const locales = (FOTOS_LOCAL[key] || []).filter(f => !remotas.some(r => r.nombre === f.nombre && r.ts === f.ts));
+          const todas = [...remotas.map(f => ({ nombre: f.nombre, ts: f.ts, srcPromise: urlADataURL(f.url) })),
+                         ...locales.map(f => ({ nombre: f.nombre, ts: f.ts, srcPromise: Promise.resolve(f.data) }))];
+          if (!todas.length) continue;
+          paresConFotos.add(`${c.n}|${mes}`);
+          porConjunto[c.n] = porConjunto[c.n] || [];
+          todas.forEach(f => porConjunto[c.n].push({ tarea: t.n, mes, slot: s + 1, ts: f.ts, nombre: f.nombre, comentarios: comentariosTarea, srcPromise: f.srcPromise }));
+        }
+      });
+    });
+  });
+
+  const conjuntosConFotos = Object.keys(porConjunto);
+  if (!conjuntosConFotos.length) { toast(`No hay fotos en Recurrentes antes de ${corte}`); return; }
+
+  const { jsPDF } = window.jspdf;
+  const marcaTiempo = tsCol().replace(/[/: ]/g, '_');
+
+  for (const conj of conjuntosConFotos) {
+    const items = porConjunto[conj];
+    const srcs = await Promise.all(items.map(it => it.srcPromise));
+
+    const doc = new jsPDF();
+    if (LOGO_BASE64) {
+      try { doc.addImage(LOGO_BASE64, 'PNG', 150, 10, 45, 27); } catch (e) { console.error('Error insertando logo en PDF', e); }
+    }
+    doc.setFontSize(14);
+    doc.setTextColor(26, 58, 42);
+    doc.text(`A&V Victoria Pineda Administraciones — Histórico fotos Recurrentes · ${conj}`, 14, 18);
+    doc.setFontSize(9);
+    doc.setTextColor(80, 80, 80);
+    doc.text(`Meses incluidos: ${mesesAPurgar.join(', ')}`, 14, 25);
+
+    let y = 34;
+    items.forEach((it, i) => {
+      if (y > 245) { doc.addPage(); y = 20; }
+      doc.setFontSize(10);
+      doc.setTextColor(26, 58, 42);
+      doc.text(`${it.tarea} — ${it.mes} · Repetición ${it.slot}`, 14, y);
+      y += 5;
+      doc.setFontSize(8);
+      doc.setTextColor(100, 100, 100);
+      doc.text(`${it.ts}${it.comentarios ? ' · ' + it.comentarios : ''}`, 14, y);
+      y += 4;
+      const src = srcs[i];
+      if (src) {
+        try { doc.addImage(src, 'JPEG', 14, y, 60, 45); y += 50; }
+        catch (e) { doc.text('(no se pudo insertar la imagen)', 14, y); y += 6; }
+      } else {
+        doc.text('(imagen no disponible)', 14, y);
+        y += 6;
+      }
+      y += 4;
+    });
+
+    doc.save(`GestionPH_FotosRecurrentes_${conj.replace(/\s+/g, '_')}_${marcaTiempo}.pdf`);
+  }
+
+  toast(`📥 Histórico descargado (${conjuntosConFotos.length} conjunto(s))`);
+
+  if (!confirm(`Se descargó el histórico de fotos de Recurrentes anteriores a ${corte} (${conjuntosConFotos.length} PDF(s), uno por conjunto).\n\n¿Borrar estas fotos de Storage para liberar espacio? Las casillas ✓ marcadas NO se ven afectadas, solo se elimina la imagen. No se puede deshacer — el respaldo queda solo en los PDFs descargados.`)) return;
+
+  let bytesLiberados = 0;
+  const tareasEliminarPromesas = [];
+
+  paresConFotos.forEach(par => {
+    const [conjunto, mes] = par.split('|');
+    const nodoRuta = `${DB_FOTOS}/${conjunto}/${mes}`.replace(/\s+/g, '_');
+
+    // Local: limpiar FOTOS_LOCAL/FOTOS_REMOTAS de ese conjunto+mes y resetear hasFoto/fotoCount
+    Object.keys(FOTOS_LOCAL).concat(Object.keys(FOTOS_REMOTAS)).forEach(key => {
+      if (!key.startsWith(`${conjunto}|${mes}|`)) return;
+      delete FOTOS_LOCAL[key];
+      delete FOTOS_REMOTAS[key];
+      const [, , tareaIdx, slotIdx] = key.split('|');
+      const slot = ESTADO[conjunto] && ESTADO[conjunto][mes] && ESTADO[conjunto][mes][tareaIdx] && ESTADO[conjunto][mes][tareaIdx][slotIdx];
+      if (slot) { slot.hasFoto = false; slot.fotoCount = 0; }
+    });
+
+    // Remoto: listar y borrar cada archivo real de Storage + el nodo de metadatos en Database
+    if (FB_STORAGE && FB_FOTOS_REF) {
+      const p = FB_STORAGE.ref(nodoRuta).listAll()
+        .then(res => Promise.all(res.items.map(itemRef =>
+          itemRef.getMetadata().then(meta => { bytesLiberados += meta.size || 0; return itemRef.delete(); }).catch(() => {})
+        )))
+        .then(() => firebase.database().ref(nodoRuta).remove())
+        .catch(err => console.error('Error borrando fotos de', nodoRuta, err));
+      tareasEliminarPromesas.push(p);
+    }
+  });
+
+  guardarFotosLocal();
+  await Promise.all(tareasEliminarPromesas);
+  if (bytesLiberados > 0) ajustarContadorFotos(-bytesLiberados);
+
+  programarAutoSave();
+  renderAdmin();
+  if (typeof renderRecurrentes === 'function') renderRecurrentes();
+  toast('🗑 Fotos borradas, espacio liberado');
+}
+
 function verHistorialArchivadas() {
   const lista = DATA.tareasArchivo.map(t => `${t.id} — ${t.n} (${t.est}, ${t.archivedAt})`).join('\n');
   alert(lista || 'Sin tareas archivadas');
@@ -460,6 +633,9 @@ function descargarInformeArchivo() {
   const marcaTiempo = tsCol().replace(/[/: ]/g, '_');
   Object.keys(porConjunto).sort().forEach(conj => {
     const doc = new jsPDF();
+    if (LOGO_BASE64) {
+      try { doc.addImage(LOGO_BASE64, 'PNG', 150, 10, 45, 27); } catch (e) { console.error('Error insertando logo en PDF', e); }
+    }
     doc.setFontSize(14);
     doc.setTextColor(26, 58, 42);
     doc.text(`A&V Victoria Pineda Administraciones — Archivo de aprobadas · ${conj}`, 14, 18);
