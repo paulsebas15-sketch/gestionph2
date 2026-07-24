@@ -5,6 +5,8 @@
 
 let FB_APP = null;
 let FB_REF = null;
+let FB_STORAGE = null;
+let FB_FOTOS_REF = null;
 let _autoSaveTimer = null;
 let _lastFbRenderAt = 0;
 let _fbInitialized = false;
@@ -16,6 +18,14 @@ function initFirebase() {
     FB_APP = firebase.initializeApp(FIREBASE_CONFIG);
     FB_REF = firebase.database().ref(DB_PATH);
     FB_REF.on('value', onFirebaseSnapshot, onFirebaseError);
+    // El archivo real de cada foto vive en Firebase Storage; aquí en Realtime Database solo se
+    // guarda la URL + metadatos (liviano, y sí se puede "escuchar" en tiempo real — Storage no
+    // tiene esa capacidad). Así cualquier dispositivo ve las fotos que subió cualquier otro.
+    if (typeof firebase.storage === 'function') {
+      FB_STORAGE = firebase.storage();
+      FB_FOTOS_REF = firebase.database().ref(DB_FOTOS);
+      FB_FOTOS_REF.on('value', onFotosSnapshot);
+    }
     window.addEventListener('online', () => {
       if (pendingSync) forceSyncMerge();
     });
@@ -23,6 +33,28 @@ function initFirebase() {
     console.error('No se pudo inicializar Firebase', e);
     actualizarIndicadorSync('offline');
   }
+}
+
+// Fusiona los metadatos remotos de fotos en FOTOS_REMOTAS, disponible globalmente para que
+// verFotoRecurrente() las muestre junto a las locales de este navegador. Cada foto se guarda
+// en Firebase con clave plana "tareaIdx_slotIdx_fotoCount" (ver subirFotoAFirebase en
+// recurrentes.js) — aquí se reagrupan por tareaIdx_slotIdx para juntarlas.
+function onFotosSnapshot(snapshot) {
+  const remoto = snapshot.val();
+  if (!remoto || typeof FOTOS_REMOTAS === 'undefined') return;
+  const nuevas = {};
+  Object.keys(remoto).forEach(conjunto => {
+    Object.keys(remoto[conjunto] || {}).forEach(mes => {
+      Object.keys(remoto[conjunto][mes] || {}).forEach(claveFotoFB => {
+        const [tareaIdx, slotIdx] = claveFotoFB.split('_');
+        const key = claveFoto(conjunto, mes, tareaIdx, slotIdx);
+        nuevas[key] = nuevas[key] || [];
+        nuevas[key].push(remoto[conjunto][mes][claveFotoFB]);
+      });
+    });
+  });
+  Object.assign(FOTOS_REMOTAS, nuevas);
+  if (PESTANA_ACTUAL === 'recurrentes' && typeof renderRecurrentes === 'function') renderRecurrentes();
 }
 
 function onFirebaseError(err) {

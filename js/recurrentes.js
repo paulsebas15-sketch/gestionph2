@@ -170,6 +170,9 @@ function toggleRecurrente(conjunto, mes, tareaIdx, slotIdx = 0) {
 // que sí viaja a Firebase). Cuando haya Firebase real, además se sube a gestionph_fotos.
 const FOTOS_LOCAL_KEY = 'gestionph_fotos_local';
 let FOTOS_LOCAL = {};
+// Metadatos de fotos subidas por CUALQUIER dispositivo, traídos por el listener de Firebase
+// (ver onFotosSnapshot en firebase.js) — clave igual a FOTOS_LOCAL, valor {url, nombre, ts}
+let FOTOS_REMOTAS = {};
 
 function cargarFotosLocal() {
   try {
@@ -216,16 +219,13 @@ function adjuntarFotoRecurrente(conjunto, mes, tareaIdx) {
 
       const key = claveFoto(conjunto, mes, tareaIdx, slotIdx);
       FOTOS_LOCAL[key] = FOTOS_LOCAL[key] || [];
+      // Mientras no haya confirmación de Firebase, se ve localmente con el base64 (reader.result);
+      // si sube bien, subirFotoAFirebase() reemplaza esta entrada por la versión con url real
       FOTOS_LOCAL[key].push({ data: reader.result, nombre: file.name, ts: tsCol() });
       guardarFotosLocal();
 
-      // La imagen real se guarda en una rama separada (gestionph_fotos), nunca en ESTADO,
-      // para no inflar el payload principal (regla PRD sección 8.2 / 5.5)
-      if (FB_REF) {
-        const ruta = `${DB_FOTOS}/${conjunto}/${mes}/${tareaIdx}_${slotIdx}_${slot.fotoCount}`.replace(/\s+/g, '_');
-        firebase.database().ref(ruta).set({ data: reader.result, nombre: file.name, ts: tsCol() })
-          .catch(err => console.error('Error subiendo foto', err));
-      }
+      subirFotoAFirebase(conjunto, mes, tareaIdx, slotIdx, slot.fotoCount, file, reader.result);
+
       toast('📷 Foto adjuntada');
       programarAutoSave();
       renderRecurrentes();
@@ -235,6 +235,22 @@ function adjuntarFotoRecurrente(conjunto, mes, tareaIdx) {
   input.click();
 }
 
+// El archivo real (imagen) se sube a Firebase Storage (no a Realtime Database — evita inflar
+// el payload principal y es el servicio hecho para esto). Solo la URL resultante + metadatos
+// livianos se guardan en gestionph_fotos/ de Realtime Database, que sí se puede "escuchar" en
+// tiempo real para que otros dispositivos se enteren de fotos nuevas (Storage no tiene eso).
+function subirFotoAFirebase(conjunto, mes, tareaIdx, slotIdx, fotoCount, file, dataUrlLocal) {
+  if (!FB_STORAGE || !FB_FOTOS_REF) return; // Firebase aún no conectado — se queda solo local
+  const rutaArchivo = `${DB_FOTOS}/${conjunto}/${mes}/${tareaIdx}_${slotIdx}_${fotoCount}`.replace(/\s+/g, '_');
+  FB_STORAGE.ref(rutaArchivo).put(file)
+    .then(snapshot => snapshot.ref.getDownloadURL())
+    .then(url => {
+      const meta = { url, nombre: file.name, ts: tsCol() };
+      return firebase.database().ref(`${DB_FOTOS}/${conjunto}/${mes}/${tareaIdx}_${slotIdx}_${fotoCount}`).set(meta);
+    })
+    .catch(err => console.error('Error subiendo foto a Firebase Storage', err));
+}
+
 // Cualquiera que vea la tarea puede abrir y revisar la(s) foto(s) adjuntas
 function verFotoRecurrente(conjunto, mes, tareaIdx) {
   const tarea = DATA.tareasRec[tareaIdx];
@@ -242,7 +258,14 @@ function verFotoRecurrente(conjunto, mes, tareaIdx) {
   let fotos = [];
   for (let s = 0; s < veces; s++) {
     const key = claveFoto(conjunto, mes, tareaIdx, s);
-    (FOTOS_LOCAL[key] || []).forEach(f => fotos.push({ ...f, slot: s + 1 }));
+    // Remotas (subidas desde cualquier dispositivo, vía Firebase) + locales de este navegador
+    // que aún no confirman URL — se deduplica por nombre+ts para no mostrar la misma 2 veces
+    // apenas termina de subir.
+    const remotas = (FOTOS_REMOTAS[key] || []).map(f => ({ ...f, slot: s + 1, src: f.url }));
+    const locales = (FOTOS_LOCAL[key] || [])
+      .filter(f => !remotas.some(r => r.nombre === f.nombre && r.ts === f.ts))
+      .map(f => ({ ...f, slot: s + 1, src: f.data }));
+    fotos.push(...remotas, ...locales);
   }
   fotos.sort((a, b) => (a.ts < b.ts ? 1 : -1));
 
@@ -250,10 +273,10 @@ function verFotoRecurrente(conjunto, mes, tareaIdx) {
   document.getElementById('ver-foto-lista').innerHTML = fotos.length
     ? fotos.map(f => `
         <div style="margin-bottom:12px">
-          <img src="${f.data}" style="width:100%;border-radius:8px;border:1px solid var(--brd)">
-          <div style="font-size:9px;color:var(--txs);margin-top:4px">${f.nombre} · ${f.ts}${(tarea.veces || 1) > 1 ? ` · Repetición ${f.slot}` : ''}</div>
+          <img src="${f.src}" style="width:100%;border-radius:8px;border:1px solid var(--brd)">
+          <div style="font-size:9px;color:var(--txs);margin-top:4px">${f.nombre} · ${f.ts}${(tarea.veces || 1) > 1 ? ` · Repetición ${f.slot}` : ''}${!f.url ? ' · ⏳ subiendo…' : ''}</div>
         </div>`).join('')
-    : '<div style="font-size:11px;color:var(--txs);text-align:center;padding:16px">Sin fotos guardadas localmente en este navegador. Si la foto se adjuntó desde otro dispositivo, aún no hay Firebase conectado para traerla — configúralo para sincronizar fotos entre dispositivos.</div>';
+    : '<div style="font-size:11px;color:var(--txs);text-align:center;padding:16px">Sin fotos para esta tarea.</div>';
   openOv('modal-ver-foto');
 }
 
