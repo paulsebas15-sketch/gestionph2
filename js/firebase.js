@@ -231,11 +231,17 @@ function mergeConjuntos(remotoConjuntos) {
   });
 }
 
-// tareasRec: unión por nombre; local gana campos
+// tareasRec: unión por nombre + aplica; local gana campos.
+// BUG CORREGIDO: antes se usaba solo t.n (nombre) como clave — pero el catálogo tiene
+// entradas DUPLICADAS por nombre a propósito (una versión Definitivos y otra Provisional (A&V)
+// para tareas compartidas, ej. "Envío movimientos, recaudos y extracto"). Con clave solo por
+// nombre, el Map solo podía guardar UNA de las dos, y la fusión con Firebase borraba en
+// silencio la otra — así se perdieron casi todas las tareas Definitivos en producción.
 function mergeTareasRec(remotoTareasRec) {
-  const porNombre = new Map(remotoTareasRec.map(t => [t.n, t]));
-  DATA.tareasRec.forEach(t => porNombre.set(t.n, t));
-  DATA.tareasRec = [...porNombre.values()];
+  const clave = t => `${t.n}|||${t.aplica}`;
+  const porClave = new Map(remotoTareasRec.map(t => [clave(t), t]));
+  DATA.tareasRec.forEach(t => porClave.set(clave(t), t));
+  DATA.tareasRec = [...porClave.values()];
 }
 
 // usuarios: unión por idx; local gana campos

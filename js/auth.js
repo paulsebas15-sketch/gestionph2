@@ -23,12 +23,25 @@ function iniciarSesion(cedula) {
     nombre: usuario.n
   };
   localStorage.setItem(SESSION_KEY, JSON.stringify(SESION_ACTUAL));
+  autenticarEnSupabase(cedula);
   return { ok: true, sesion: SESION_ACTUAL };
+}
+
+// Autentica también en Supabase (en paralelo, sin bloquear el login actual sobre Firebase) —
+// deja lista la sesión con permisos (RLS) para cuando la app lea/escriba de Supabase.
+// Mientras dura la migración, un fallo aquí no impide entrar a la app (sigue funcionando con
+// Firebase); solo se avisa en consola para poder revisarlo.
+function autenticarEnSupabase(cedula) {
+  if (typeof iniciarSesionSupabase !== 'function') return;
+  iniciarSesionSupabase(cedula).then(r => {
+    if (!r.ok) console.error('No se pudo autenticar en Supabase:', r.error);
+  });
 }
 
 function cerrarSesion() {
   SESION_ACTUAL = null;
   localStorage.removeItem(SESSION_KEY);
+  if (typeof SB !== 'undefined') SB.auth.signOut();
 }
 
 // Intenta recuperar una sesión válida guardada localmente (al recargar la app)
@@ -44,6 +57,9 @@ function recuperarSesion() {
       return null;
     }
     SESION_ACTUAL = { ...sesion, rol: registro.rol, idx: registro.idx };
+    // El cliente de Supabase ya persiste su propia sesión en localStorage y la recupera solo,
+    // pero por si acaso expiró o nunca se estableció (versión vieja de la app), se reintenta.
+    autenticarEnSupabase(sesion.cedula);
     return SESION_ACTUAL;
   } catch (e) {
     return null;

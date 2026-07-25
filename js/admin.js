@@ -38,6 +38,12 @@ function renderAdmin() {
       ${renderBarraCapacidad('Fotos (Storage)', fotosMB, LIMITE_FOTOS_MB)}
     </div>
 
+    <div class="card" style="border:2px dashed #4a3f8c">
+      <div class="section-title">🔐 Migración a Supabase — provisión de cuentas (TEMPORAL)</div>
+      <div style="font-size:9px;color:var(--txs);margin-bottom:8px">Botón de un solo uso: crea la cuenta de autenticación en Supabase para cada uno de los 11 usuarios ya migrados. Ejecutar UNA sola vez. Al terminar te muestra el SQL para vincularlas.</div>
+      <button class="btn btn-sm" style="background:#4a3f8c;color:white" onclick="provisionarUsuariosSupabase()">🔐 Provisionar cuentas en Supabase</button>
+    </div>
+
     <div class="card">
       <div class="section-title">📦 Capacidad del sistema</div>
       <div class="cap-grid">

@@ -13,6 +13,16 @@ const FIREBASE_CONFIG = {
   appId: "1:19543863402:web:fb3eeea978526d3cc01a13"
 };
 
+// ─── SUPABASE (reemplazo de Firebase en curso) ─────────────────
+// Solo la URL y la clave "publishable" (pública) — NUNCA la clave secreta, que da acceso total
+// sin pasar por las reglas de seguridad (RLS). Esta clave pública sí es segura de tener aquí:
+// su único poder es lo que las reglas RLS le permitan a cada usuario autenticado.
+const SUPABASE_URL = 'https://lioabowqrqkwwmpbnhbc.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_zWJGwbGwyCkZAYF5iLYheg_JziQlXAt';
+// Dominio ficticio usado para generar un correo por cédula (Supabase Auth requiere email) —
+// invisible para el usuario, que sigue iniciando sesión solo con su cédula
+const AUTH_EMAIL_DOMINIO = 'usuarios-gestionph.com';
+
 const DB_PATH = 'gestionph';           // nodo raíz en Firebase
 const DB_FOTOS = 'gestionph_fotos';    // fotos separadas (no infla el payload principal)
 const DB_CONTADOR_FOTOS = 'contadores/fotosBytes'; // suma de bytes subidos a Storage, para la barra de uso
