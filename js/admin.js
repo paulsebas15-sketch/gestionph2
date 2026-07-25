@@ -34,8 +34,8 @@ function renderAdmin() {
 
     <div class="card">
       <div class="section-title">📊 Uso de almacenamiento</div>
-      ${renderBarraCapacidad('Datos (Realtime Database)', datosMB, LIMITE_DATOS_MB)}
-      ${renderBarraCapacidad('Fotos (Storage)', fotosMB, LIMITE_FOTOS_MB)}
+      ${renderBarraCapacidad('Datos (Supabase)', datosMB, LIMITE_DATOS_MB)}
+      ${renderBarraCapacidad('Fotos (Firebase Storage)', fotosMB, LIMITE_FOTOS_MB)}
     </div>
 
     <div class="card" style="border:2px dashed #4a3f8c">
