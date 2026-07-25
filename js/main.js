@@ -24,14 +24,22 @@ const TITULOS_PESTANA = {
   evaluacion: '📝 Evaluación', informes: '📄 Informes', analitica: '📈 Analítica', tareasAV: '🗂 Tareas A&V', admin: '⚙️ Admin'
 };
 
-function initApp() {
+async function initApp() {
   cargarLocal();
   cargarFotosLocal();
-  poblarDatosEjemploSiVacio();
   initFirebase();
+
+  // Conjuntos/usuarios/cédulas son de lectura pública (RLS los deja ver sin sesión) — se cargan
+  // ya mismo para poder validar la cédula en el login. Las tablas protegidas por conjunto
+  // (tareasEve, ESTADO, etc.) llegan vacías por ahora — RLS las filtra hasta que haya sesión.
+  const cargaInicial = await cargarTodoDesdeSupabase();
+  if (!cargaInicial.ok || !DATA.usuarios.length) {
+    poblarDatosEjemploSiVacio(); // sin internet / Supabase caído — usar datos mínimos de ejemplo
+  }
 
   const sesion = recuperarSesion();
   if (sesion) {
+    await autenticarEnSupabase(sesion.cedula); // ahora sí trae los datos reales con permisos
     mostrarApp();
   } else {
     mostrarLogin();
@@ -68,9 +76,11 @@ function mostrarLogin() {
   document.getElementById('pantalla-app').classList.add('oculto');
 }
 
-function intentarLogin() {
+async function intentarLogin() {
   const cedula = document.getElementById('input-cedula').value.trim();
   const errorEl = document.getElementById('login-error');
+  const btn = document.querySelector('.login-card .btn-v');
+
   const resultado = iniciarSesion(cedula);
   if (!resultado.ok) {
     errorEl.textContent = resultado.error;
@@ -78,6 +88,10 @@ function intentarLogin() {
     return;
   }
   errorEl.classList.add('oculto');
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Entrando…'; }
+  await autenticarEnSupabase(cedula);
+  if (btn) { btn.disabled = false; btn.textContent = 'Ingresar →'; }
   mostrarApp();
 }
 

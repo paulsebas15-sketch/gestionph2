@@ -17,7 +17,9 @@ function initFirebase() {
   try {
     FB_APP = firebase.initializeApp(FIREBASE_CONFIG);
     FB_REF = firebase.database().ref(DB_PATH);
-    FB_REF.on('value', onFirebaseSnapshot, onFirebaseError);
+    // Ya NO se escucha este nodo (antes: FB_REF.on('value', onFirebaseSnapshot...)) — los datos
+    // (tareasEve, ESTADO, etc.) ahora viven en Supabase y se cargan desde ahí (ver supabase.js,
+    // cargarTodoDesdeSupabase). Firebase Realtime Database queda activo solo para las fotos.
     // El archivo real de cada foto vive en Firebase Storage; aquí en Realtime Database solo se
     // guarda la URL + metadatos (liviano, y sí se puede "escuchar" en tiempo real — Storage no
     // tiene esa capacidad). Así cualquier dispositivo ve las fotos que subió cualquier otro.
