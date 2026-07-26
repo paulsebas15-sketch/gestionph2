@@ -243,7 +243,7 @@ function renderDetalleEval(conjuntoNombre, mes) {
   return `
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-        <div class="card-title" style="margin:0">Ítems de evaluación — ${conjuntoNombre} · ${mes} <span style="font-size:9px;color:var(--txs);text-transform:none">(${tipoConjunto(conjuntoNombre)})</span></div>
+        <div class="card-title" style="margin:0">Ítems de evaluación — ${conjuntoNombre} · ${mes} <span style="font-size:9px;color:var(--txs);text-transform:none">(${etiquetaTipo(tipoConjunto(conjuntoNombre))})</span></div>
         <span class="nota-chip ${clasif.clase}">${res.nota}% · ${clasif.label}</span>
       </div>
       <div style="font-size:9px;color:var(--txs);margin-bottom:8px">🔵 Auto = calculado por el sistema · 🟠 Manual = ingresado por gerencia</div>

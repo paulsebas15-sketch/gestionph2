@@ -374,7 +374,7 @@ function renderFilasTareasRec() {
     return `
       <tr>
         <td style="font-size:10px">${t.n}</td>
-        <td style="font-size:9px;color:var(--txs)">${t.aplica}</td>
+        <td style="font-size:9px;color:var(--txs)">${etiquetaTipo(t.aplica)}</td>
         <td style="font-size:9px;color:var(--txs)">${t.frec || 'mensual'}</td>
         <td style="font-size:10px;text-align:center">${t.veces || 1}</td>
         <td style="font-size:10px;text-align:center;${t.bimestral ? 'color:var(--vm)' : ''}">${t.bimestral ? '✓' : '—'}</td>
@@ -878,10 +878,17 @@ function limpiarConjuntosExcluidos(snap) {
 }
 
 // ─── BACKUP AUTOMÁTICO SEMANAL (regla 6.8) ────────────────────
+// Se llama al entrar a la app (mostrarApp), no al abrir la pestaña — así solo se dispara
+// cuando alguien de verdad inició sesión, no para cualquiera que abra el link. Además, solo
+// para la cédula configurada (CEDULA_BACKUP_AUTOMATICO) — nadie más lo ve, ni delegados ni
+// otro staff. Pide confirmación antes de descargar; si se cancela, se vuelve a preguntar la
+// próxima vez que entre esa misma semana (no se marca como hecho).
 function verificarBackupAutomatico() {
+  if (!SESION_ACTUAL || SESION_ACTUAL.cedula !== CEDULA_BACKUP_AUTOMATICO) return;
   const semanaActual = semanaISO();
   const ultimoBackup = localStorage.getItem(BACKUP_KEY);
-  if (ultimoBackup !== semanaActual) {
+  if (ultimoBackup === semanaActual) return;
+  if (confirm('📥 Backup semanal de GestiónPH\n\n¿Descargar el respaldo de datos de esta semana?')) {
     exportarBackup();
   }
 }

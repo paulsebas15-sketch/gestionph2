@@ -13,6 +13,14 @@ function getMes() {
   return MES_SELECCIONADO;
 }
 
+// Solo para mostrar en pantalla — el valor real guardado sigue siendo 'Provisional (A&V)'
+// (columna tipo/aplica en Supabase, con esa regla exacta). Cambiar el valor de verdad
+// requeriría tocar la base de datos y todo el código que compara contra ese texto — esto
+// evita ese riesgo, es puramente cosmético.
+function etiquetaTipo(valor) {
+  return valor === 'Provisional (A&V)' ? 'Provisional' : valor;
+}
+
 function setMes(mes) {
   MES_SELECCIONADO = mes;
   localStorage.setItem('gph_mesSel', mes);

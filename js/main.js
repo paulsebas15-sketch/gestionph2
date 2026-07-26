@@ -125,6 +125,7 @@ function mostrarApp() {
   renderPestanaActual();
   updBadge();
   cargarContadorFotos(); // barra de capacidad de fotos en Admin
+  verificarBackupAutomatico(); // solo dispara para CEDULA_BACKUP_AUTOMATICO, una vez por semana
 }
 
 function iniciales(nombre) {
@@ -228,5 +229,4 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   initApp();
   precargarLogo();
-  verificarBackupAutomatico();
 });

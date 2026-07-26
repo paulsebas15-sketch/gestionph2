@@ -21,6 +21,7 @@ const SAVE_DELAY = 600;                // ms debounce de guardado individual
 const LOCAL_STORAGE_KEY = 'gestionph_v3';
 const SESSION_KEY = 'gph_session';
 const BACKUP_KEY = 'gph_lastBackup';
+const CEDULA_BACKUP_AUTOMATICO = '1144085135'; // solo esta cédula recibe el aviso de backup semanal
 
 // ─── ESTADOS Y CLASIFICACIONES ──────────────────────────────
 const ESTADOS_FINALES = ['Aprobado', 'Suspendido'];
