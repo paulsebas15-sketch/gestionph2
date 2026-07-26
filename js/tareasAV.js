@@ -1,6 +1,6 @@
 // tareasAV.js — Tareas internas del equipo A&V (no de conjuntos, sin delegados)
 // GestiónPH v2.0
-// Depende de: config.js, datos.js, ui.js, firebase.js
+// Depende de: config.js, datos.js, ui.js
 
 function renderTareasAV() {
   const cont = document.getElementById('content-tareasAV');
@@ -40,8 +40,10 @@ function abrirNuevaTareaAV() {
   const nombre = prompt('Nombre de la tarea A&V:');
   if (!nombre) return;
   const vence = prompt('Fecha de vencimiento (DD/MM):', fechaCortaCol());
-  DATA.tareasAV.push({ id: siguienteIdAV(), n: nombre, est: 'Nuevo', vence: vence || fechaCortaCol() });
-  programarAutoSave();
+  const id = siguienteIdAV();
+  DATA.tareasAV.push({ id, n: nombre, est: 'Nuevo', vence: vence || fechaCortaCol() });
+  guardarLocal();
+  guardarTareaAVEnSupabase(id); // guardado individual: solo esta tarea, ninguna otra se toca
   renderTareasAV();
 }
 
@@ -49,6 +51,7 @@ function cambiarEstadoTareaAV(id, estado) {
   const t = DATA.tareasAV.find(t => t.id === id);
   if (!t) return;
   t.est = estado;
-  programarAutoSave();
+  guardarLocal();
+  guardarTareaAVEnSupabase(id); // guardado individual: solo esta tarea, ninguna otra se toca
   renderTareasAV();
 }

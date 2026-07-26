@@ -1,6 +1,6 @@
 // recurrentes.js — Checkboxes por conjunto/mes, % avance, comentarios, fotos
 // GestiónPH v2.0
-// Depende de: config.js, datos.js, ui.js, firebase.js
+// Depende de: config.js, datos.js, ui.js
 
 // Único cálculo de % de avance — reutilizado también por dashboard.js y evaluacion.js
 // (evita el bug conocido "Dashboard % no coincide con Recurrentes", PRD sección 9)
@@ -75,7 +75,7 @@ const TAREAS_FECHA_AUTO_CALENDARIO = [
 
 function guardarFechaIndividualRec(conjunto, mes, idx, iso) {
   setFechaLimiteRec(conjunto, mes, idx, isoAFechaCorta(iso));
-  programarAutoSave();
+  programarGuardadoFechaLimite(conjunto, mes, idx); // guardado individual: solo esta fecha, ninguna otra se toca
   renderRecurrentes();
 }
 
@@ -159,21 +159,19 @@ function toggleRecurrente(conjunto, mes, tareaIdx, slotIdx = 0) {
     slot.tsManual = null;
     delete slot.undoneAt;
   }
-  programarAutoSave();
+  programarGuardadoEstadoSlot(conjunto, mes, tareaIdx, slotIdx); // guardado individual: solo esta casilla, ninguna otra se toca
   renderRecurrentes();
   if (typeof updBadge === 'function') updBadge();
 }
 
-// ─── FOTOS ──────────────────────────────────────────────────────
-// Mientras no haya Firebase real conectado, las fotos se guardan localmente
-// (localStorage, clave separada de gestionph_v3 para no inflar el snapshot principal
-// que sí viaja a Firebase). Cuando haya Firebase real, además se sube a gestionph_fotos.
+// ─── FOTOS (Supabase Storage) ────────────────────────────────────
+// Las fotos viven en un bucket privado de Supabase Storage, con RLS por conjunto (mismo
+// criterio que el resto de los datos). No hay "escuchar en tiempo real" como tenía Firebase —
+// se trae la lista fresca de fotos cada vez que se abre el visor (recarga simple, decisión del
+// usuario: más simple y menos piezas que puedan fallar que mantener un listener).
 const FOTOS_LOCAL_KEY = 'gestionph_fotos_local';
-let FOTOS_LOCAL = {};
-// Metadatos de fotos subidas por CUALQUIER dispositivo, traídos por el listener de Firebase
-// (ver onFotosSnapshot en firebase.js) — clave igual a FOTOS_LOCAL, valor {url, nombre, ts}
-let FOTOS_REMOTAS = {};
-// Suma de bytes de todas las fotos en Storage — alimentado por el listener en firebase.js,
+let FOTOS_LOCAL = {}; // vista previa optimista mientras sube (localStorage, clave = claveFoto())
+// Suma de bytes de todas las fotos en Storage — se trae de la tabla `contadores` de Supabase,
 // usado para la barra de uso en Admin
 let CONTADOR_FOTOS_BYTES = 0;
 
@@ -220,18 +218,20 @@ function adjuntarFotoRecurrente(conjunto, mes, tareaIdx) {
         const slot = ensureEstadoSlot(conjunto, mes, tareaIdx, slotIdx);
         slot.hasFoto = true;
         slot.fotoCount = (slot.fotoCount || 0) + 1;
+        const fotoCount = slot.fotoCount;
 
         const key = claveFoto(conjunto, mes, tareaIdx, slotIdx);
         FOTOS_LOCAL[key] = FOTOS_LOCAL[key] || [];
-        // Mientras no haya confirmación de Firebase, se ve localmente con el base64 (reader.result);
-        // si sube bien, subirFotoAFirebase() reemplaza esta entrada por la versión con url real
+        // Vista previa optimista con el base64 mientras sube — listarFotosSupabase() ya no
+        // necesita "reemplazar" esta entrada como antes con Firebase; conviven mostrando ambas
+        // fuentes (ver verFotoRecurrente), y la local se limpia sola al cerrar el modal.
         FOTOS_LOCAL[key].push({ data: reader.result, nombre: file.name, ts: tsCol() });
         guardarFotosLocal();
 
-        subirFotoAFirebase(conjunto, mes, tareaIdx, slotIdx, slot.fotoCount, blob, file.name);
+        subirFotoASupabase(conjunto, mes, tareaIdx, slotIdx, fotoCount, blob);
 
         toast('📷 Foto adjuntada');
-        programarAutoSave();
+        programarGuardadoEstadoSlot(conjunto, mes, tareaIdx, slotIdx); // guardado individual: solo esta casilla, ninguna otra se toca
         renderRecurrentes();
       };
       reader.readAsDataURL(blob);
@@ -264,50 +264,68 @@ function comprimirImagen(file, maxAncho = FOTO_MAX_ANCHO, calidad = FOTO_CALIDAD
   });
 }
 
-// El archivo real (imagen) se sube a Firebase Storage (no a Realtime Database — evita inflar
-// el payload principal y es el servicio hecho para esto). Solo la URL resultante + metadatos
-// livianos se guardan en gestionph_fotos/ de Realtime Database, que sí se puede "escuchar" en
-// tiempo real para que otros dispositivos se enteren de fotos nuevas (Storage no tiene eso).
-function subirFotoAFirebase(conjunto, mes, tareaIdx, slotIdx, fotoCount, blob, nombreOriginal) {
-  if (!FB_STORAGE || !FB_FOTOS_REF) return; // Firebase aún no conectado — se queda solo local
-  const rutaArchivo = `${DB_FOTOS}/${conjunto}/${mes}/${tareaIdx}_${slotIdx}_${fotoCount}`.replace(/\s+/g, '_');
-  FB_STORAGE.ref(rutaArchivo).put(blob)
-    .then(snapshot => snapshot.ref.getDownloadURL())
-    .then(url => {
-      const meta = { url, nombre: nombreOriginal, ts: tsCol(), bytes: blob.size };
-      return firebase.database().ref(`${DB_FOTOS}/${conjunto}/${mes}/${tareaIdx}_${slotIdx}_${fotoCount}`).set(meta);
-    })
-    .then(() => ajustarContadorFotos(blob.size))
-    .catch(err => console.error('Error subiendo foto a Firebase Storage', err));
+// Ruta del archivo en el bucket privado de Supabase Storage. El primer segmento (conjunto) es
+// lo que las políticas RLS de storage.objects usan para decidir quién puede ver/subir/borrar.
+function rutaFotoSupabase(conjunto, mes, tareaIdx, slotIdx, fotoCount) {
+  return `${conjunto}/${mes}/${tareaIdx}_${slotIdx}_${fotoCount}.jpg`;
 }
 
-// Cualquiera que vea la tarea puede abrir y revisar la(s) foto(s) adjuntas
-function verFotoRecurrente(conjunto, mes, tareaIdx) {
+async function subirFotoASupabase(conjunto, mes, tareaIdx, slotIdx, fotoCount, blob) {
+  const ruta = rutaFotoSupabase(conjunto, mes, tareaIdx, slotIdx, fotoCount);
+  const { error } = await SB.storage.from(SUPABASE_FOTOS_BUCKET).upload(ruta, blob, { contentType: 'image/jpeg', upsert: true });
+  if (error) {
+    console.error('Error subiendo foto a Supabase Storage', error.message);
+    toast('⚠️ No se pudo subir la foto — revisa tu conexión');
+    return;
+  }
+  await SB.rpc('ajustar_contador', { p_clave: 'fotos_bytes', p_delta: blob.size });
+  await cargarContadorFotos();
+}
+
+// Trae la lista de fotos de UNA casilla puntual (conjunto+mes+tarea+repetición) desde Supabase,
+// con una URL firmada válida por 1 hora (el bucket es privado, no hay links directos permanentes).
+async function listarFotosSupabase(conjunto, mes, tareaIdx, slotIdx) {
+  const carpeta = `${conjunto}/${mes}`;
+  const prefijoArchivo = `${tareaIdx}_${slotIdx}_`;
+  const { data, error } = await SB.storage.from(SUPABASE_FOTOS_BUCKET).list(carpeta, { search: prefijoArchivo });
+  if (error || !data) return [];
+  const propias = data.filter(f => f.name.startsWith(prefijoArchivo));
+  const conUrl = await Promise.all(propias.map(async f => {
+    const { data: firmada } = await SB.storage.from(SUPABASE_FOTOS_BUCKET).createSignedUrl(`${carpeta}/${f.name}`, 3600);
+    return { nombre: f.name, ts: f.created_at ? new Date(f.created_at).toLocaleString('es-CO') : '', src: firmada ? firmada.signedUrl : null };
+  }));
+  return conUrl.filter(f => f.src);
+}
+
+// Cualquiera que vea la tarea puede abrir y revisar la(s) foto(s) adjuntas. Sin "tiempo real":
+// se trae la lista fresca de Supabase cada vez que se abre el visor (recarga simple).
+async function verFotoRecurrente(conjunto, mes, tareaIdx) {
   const tarea = DATA.tareasRec[tareaIdx];
   const veces = tarea.veces || 1;
+  document.getElementById('ver-foto-titulo').textContent = tarea.n;
+  document.getElementById('ver-foto-lista').innerHTML = '<div style="font-size:11px;color:var(--txs);text-align:center;padding:16px">Cargando fotos…</div>';
+  openOv('modal-ver-foto');
+
   let fotos = [];
   for (let s = 0; s < veces; s++) {
     const key = claveFoto(conjunto, mes, tareaIdx, s);
-    // Remotas (subidas desde cualquier dispositivo, vía Firebase) + locales de este navegador
-    // que aún no confirman URL — se deduplica por nombre+ts para no mostrar la misma 2 veces
-    // apenas termina de subir.
-    const remotas = (FOTOS_REMOTAS[key] || []).map(f => ({ ...f, slot: s + 1, src: f.url }));
+    const remotas = (await listarFotosSupabase(conjunto, mes, tareaIdx, s)).map(f => ({ ...f, slot: s + 1 }));
+    // Locales de este navegador que aún no confirman subida — se deduplica por nombre+ts para
+    // no mostrar la misma foto 2 veces apenas termina de subir.
     const locales = (FOTOS_LOCAL[key] || [])
-      .filter(f => !remotas.some(r => r.nombre === f.nombre && r.ts === f.ts))
+      .filter(f => !remotas.some(r => r.ts && f.ts && r.ts === f.ts))
       .map(f => ({ ...f, slot: s + 1, src: f.data }));
     fotos.push(...remotas, ...locales);
   }
   fotos.sort((a, b) => (a.ts < b.ts ? 1 : -1));
 
-  document.getElementById('ver-foto-titulo').textContent = tarea.n;
   document.getElementById('ver-foto-lista').innerHTML = fotos.length
     ? fotos.map(f => `
         <div style="margin-bottom:12px">
           <img src="${f.src}" style="width:100%;border-radius:8px;border:1px solid var(--brd)">
-          <div style="font-size:9px;color:var(--txs);margin-top:4px">${f.nombre} · ${f.ts}${(tarea.veces || 1) > 1 ? ` · Repetición ${f.slot}` : ''}${!f.url ? ' · ⏳ subiendo…' : ''}</div>
+          <div style="font-size:9px;color:var(--txs);margin-top:4px">${f.nombre} · ${f.ts}${(tarea.veces || 1) > 1 ? ` · Repetición ${f.slot}` : ''}${f.data ? ' · ⏳ subiendo…' : ''}</div>
         </div>`).join('')
     : '<div style="font-size:11px;color:var(--txs);text-align:center;padding:16px">Sin fotos para esta tarea.</div>';
-  openOv('modal-ver-foto');
 }
 
 function abrirComentariosRecurrente(conjunto, tareaIdx) {
@@ -334,7 +352,7 @@ function enviarComentarioRecurrente() {
   const usuario = usuarioActual();
   const comentarios = ensureRecComs(conjunto, tareaIdx);
   comentarios.push(`${texto} - ${usuario ? usuario.n : '—'} ${fechaCortaCol()}`);
-  programarAutoSave();
+  programarGuardadoComentariosRecurrente(conjunto, tareaIdx); // guardado individual: solo esta tarea, ninguna otra se toca
   abrirComentariosRecurrente(conjunto, tareaIdx);
   renderRecurrentes();
 }

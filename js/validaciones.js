@@ -1,6 +1,6 @@
 // validaciones.js — Vista de tareas Finalizadas por validar
 // GestiónPH v2.0
-// Depende de: config.js, datos.js, ui.js, firebase.js, aprobaciones.js (devolverTarea)
+// Depende de: config.js, datos.js, ui.js, aprobaciones.js (devolverTarea)
 
 function renderValidaciones() {
   const cont = document.getElementById('content-validaciones');
@@ -41,7 +41,7 @@ function validarYAprobar(id) {
   t.est = 'Aprobado';
   t.estUpdAt = Date.now();
   if (!t.aprobadoEn) t.aprobadoEn = Date.now();
-  programarAutoSave();
+  programarGuardadoEventual(id); // guardado individual: solo esta tarea, ninguna otra se toca
   renderValidaciones();
   updBadge();
   toast('✓ Tarea validada y aprobada');

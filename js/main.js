@@ -27,7 +27,14 @@ const TITULOS_PESTANA = {
 async function initApp() {
   cargarLocal();
   cargarFotosLocal();
-  initFirebase();
+
+  // Protección offline (ver actualizarIndicadorSync en supabase.js): si la sesión anterior se
+  // cerró con algún cambio que no alcanzó a subir por falta de internet, avisar ANTES de traer
+  // los datos del servidor — que están a punto de reemplazar lo que hay en memoria/local.
+  if (localStorage.getItem(PENDIENTE_OFFLINE_KEY)) {
+    alert('⚠️ La última vez que usaste GestiónPH hubo un cambio que no se pudo guardar por falta de conexión.\n\nAhora se va a cargar la información más reciente del servidor. Si hiciste algún cambio justo antes de cerrar sin internet, revisa que haya quedado guardado y repítelo si hace falta.');
+    localStorage.removeItem(PENDIENTE_OFFLINE_KEY);
+  }
 
   // Conjuntos/usuarios/cédulas son de lectura pública (RLS los deja ver sin sesión) — se cargan
   // ya mismo para poder validar la cédula en el login. Las tablas protegidas por conjunto
@@ -117,6 +124,7 @@ function mostrarApp() {
   PESTANA_ACTUAL = pestanasVisibles()[0] || 'dashboard';
   renderPestanaActual();
   updBadge();
+  cargarContadorFotos(); // barra de capacidad de fotos en Admin
 }
 
 function iniciales(nombre) {

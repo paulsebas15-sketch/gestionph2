@@ -1,6 +1,6 @@
 // aprobaciones.js — Vista de tareas pendientes de aprobación (solo admin)
 // GestiónPH v2.0
-// Depende de: config.js, datos.js, ui.js, firebase.js
+// Depende de: config.js, datos.js, ui.js
 
 function renderAprobaciones() {
   const cont = document.getElementById('content-aprobaciones');
@@ -43,7 +43,7 @@ function aprobarTarea(id) {
   t.est = 'Aprobado';
   t.estUpdAt = Date.now();
   if (!t.aprobadoEn) t.aprobadoEn = Date.now();
-  programarAutoSave();
+  programarGuardadoEventual(id); // guardado individual: solo esta tarea, ninguna otra se toca
   renderAprobaciones();
   updBadge();
   toast('✓ Tarea aprobada');
@@ -64,7 +64,7 @@ function devolverTarea(id, estadoDestino) {
   const usuario = usuarioActual();
   t.coms = t.coms || [];
   t.coms.push(`${motivo.trim()} - ${usuario ? usuario.n : '—'} ${fechaCortaCol()}`);
-  programarAutoSave();
+  programarGuardadoEventual(id); // guardado individual: solo esta tarea, ninguna otra se toca
   renderAprobaciones();
   if (typeof renderValidaciones === 'function') renderValidaciones();
   updBadge();

@@ -1,6 +1,6 @@
 // admin.js — Panel de administración: conjuntos, usuarios, tareas recurrentes, capacidad/backup
 // GestiónPH v2.0
-// Depende de: config.js, datos.js, ui.js, firebase.js
+// Depende de: config.js, datos.js, ui.js
 
 function renderBarraCapacidad(etiqueta, usadoMB, limiteMB) {
   const pct = limiteMB > 0 ? Math.min(100, Math.round((usadoMB / limiteMB) * 100)) : 0;
@@ -35,7 +35,7 @@ function renderAdmin() {
     <div class="card">
       <div class="section-title">📊 Uso de almacenamiento</div>
       ${renderBarraCapacidad('Datos (Supabase)', datosMB, LIMITE_DATOS_MB)}
-      ${renderBarraCapacidad('Fotos (Firebase Storage)', fotosMB, LIMITE_FOTOS_MB)}
+      ${renderBarraCapacidad('Fotos (Supabase Storage)', fotosMB, LIMITE_FOTOS_MB)}
     </div>
 
     <div class="card" style="border:2px dashed #4a3f8c">
@@ -43,6 +43,7 @@ function renderAdmin() {
       <div style="font-size:9px;color:var(--txs);margin-bottom:8px">Botón de un solo uso: crea la cuenta de autenticación en Supabase para cada uno de los 11 usuarios ya migrados. Ejecutar UNA sola vez. Al terminar te muestra el SQL para vincularlas.</div>
       <button class="btn btn-sm" style="background:#4a3f8c;color:white" onclick="provisionarUsuariosSupabase()">🔐 Provisionar cuentas en Supabase</button>
     </div>
+
 
     <div class="card">
       <div class="section-title">📦 Capacidad del sistema</div>
@@ -177,6 +178,7 @@ function guardarConjunto() {
   if (nombreActual) {
     // Editando uno existente
     const c = conjuntoPorNombre(nombreActual);
+    const delegadoAnterior = c.del; // capturado ANTES de sobreescribir, para el diff quirúrgico de delegado_conjuntos
     const tipoAnterior = (DATA.conjuntos.def || []).includes(c) ? 'def' : 'pro';
     if (nuevoNombre !== nombreActual) {
       // Al renombrar: actualizar referencias en ESTADO, REC_COMS y tareasEve (regla sección 5.13)
@@ -196,11 +198,17 @@ function guardarConjunto() {
       DATA.conjuntos[tipo].push(c);
     }
     asignarDelegadoAConjunto(nuevoNombre, delegado);
+    sincronizarAsignacionConjunto(nuevoNombre, delegadoAnterior, delegado); // guardado individual: solo las 2 filas que cambiaron en delegado_conjuntos
+    guardarLocal();
+    guardarConjuntoEnSupabase(nombreActual, nuevoNombre, c, tipo === 'def' ? 'Definitivos' : 'Provisional (A&V)'); // guardado individual: solo esta fila del conjunto
     toast('✓ Conjunto actualizado');
   } else {
     // Nuevo conjunto
     DATA.conjuntos[tipo] = DATA.conjuntos[tipo] || [];
-    DATA.conjuntos[tipo].push({ n: nuevoNombre, del: delegado || '—', c: '#4a7c59', eval: {} });
+    const nuevoConjunto = { n: nuevoNombre, del: delegado || '—', c: '#4a7c59', eval: {} };
+    DATA.conjuntos[tipo].push(nuevoConjunto);
+    // Slots vacíos solo en memoria local (para que el conjunto se vea listo de inmediato en
+    // Recurrentes) — NO se pre-insertan en Supabase, cada casilla se crea sola al primer toque real.
     DATA.tareasRec.forEach((t, idx) => {
       const veces = t.veces || 1;
       MESES.forEach(mes => {
@@ -209,10 +217,12 @@ function guardarConjunto() {
       ensureRecComs(nuevoNombre, idx);
     });
     asignarDelegadoAConjunto(nuevoNombre, delegado);
+    sincronizarAsignacionConjunto(nuevoNombre, null, delegado); // guardado individual: solo la fila nueva de delegado_conjuntos
+    guardarLocal();
+    guardarConjuntoEnSupabase(null, nuevoNombre, nuevoConjunto, tipo === 'def' ? 'Definitivos' : 'Provisional (A&V)'); // guardado individual: solo esta fila del conjunto
     toast('✓ Conjunto creado');
   }
   closeOv('modal-conjunto');
-  programarAutoSave();
   renderAdmin();
   refrescarSelectsHeader();
 }
@@ -224,12 +234,15 @@ function eliminarConjunto() {
   const c = conjuntoPorNombre(nombreActual);
   if (!c) return;
   if (!confirm(`¿Eliminar "${c.n}"? Se ocultará de la app pero su historial de tareas y evaluaciones queda guardado.`)) return;
+  const delegadoAnterior = c.del; // capturado antes de limpiar, para el diff quirúrgico de delegado_conjuntos
   c.deleted = true;
   DATA.usuarios.forEach(u => {
     if (u.conjuntos) u.conjuntos = u.conjuntos.filter(cn => cn !== nombreActual);
   });
+  sincronizarAsignacionConjunto(nombreActual, delegadoAnterior, null); // guardado individual: solo borra esa fila puntual
+  guardarLocal();
+  eliminarConjuntoEnSupabase(nombreActual); // guardado individual: solo marca deleted en esta fila
   closeOv('modal-conjunto');
-  programarAutoSave();
   renderAdmin();
   refrescarSelectsHeader();
   toast('Conjunto eliminado');
@@ -319,21 +332,23 @@ function guardarUsuario() {
   const activo = document.getElementById('usr-activo').value === 'true';
 
   const editIdx = parseInt(document.getElementById('usr-edit-idx').value, 10);
+  let idxGuardado;
   if (editIdx >= 0) {
     const u = DATA.usuarios[editIdx];
     Object.assign(u, { n: nombre, rol, cargo, equipo });
     const cedulaExistente = cedulaPorIdxUsuario(editIdx);
     if (cedulaExistente) DATA.cedulas[cedulaExistente].activo = activo;
+    idxGuardado = editIdx;
     toast('✓ Usuario actualizado');
   } else {
     if (DATA.cedulas[cedula]) { toast('Esa cédula ya está registrada'); return; }
-    const idx = DATA.usuarios.length;
+    idxGuardado = DATA.usuarios.length;
     DATA.usuarios.push({ n: nombre, rol, conjuntos: [], cargo, equipo, av: iniciales(nombre), c: '#4a7c59', ra: nombre.split(' ')[0].toLowerCase() });
-    DATA.cedulas[cedula] = { idx, rol, activo };
+    DATA.cedulas[cedula] = { idx: idxGuardado, rol, activo };
     toast('✓ Usuario creado');
   }
   closeOv('modal-usuario');
-  programarAutoSave();
+  programarGuardadoUsuario(idxGuardado); // guardado individual: solo este usuario, ningún otro se toca
   renderAdmin();
 }
 
@@ -347,7 +362,7 @@ function eliminarUsuario() {
   const cedula = cedulaPorIdxUsuario(editIdx);
   if (cedula) DATA.cedulas[cedula].activo = false;
   closeOv('modal-usuario');
-  programarAutoSave();
+  programarGuardadoUsuario(editIdx); // guardado individual: solo este usuario, ningún otro se toca
   renderAdmin();
   toast('Usuario desactivado');
 }
@@ -429,18 +444,23 @@ function guardarTareaRecurrente() {
   const autoEval = evalPts > 0;
 
   const editIdx = parseInt(document.getElementById('rec-edit-idx').value, 10);
+  let idxGuardado;
   if (editIdx >= 0) {
     const t = DATA.tareasRec[editIdx];
     Object.assign(t, { n: nombre, desc, frec, aplica, veces, bimestral, foto, fechaVariable, fechaIndividual, autoEval, evalPts, cuando, limite });
+    idxGuardado = editIdx;
     toast('✓ Tarea recurrente actualizada');
   } else {
-    const idx = DATA.tareasRec.length;
+    idxGuardado = DATA.tareasRec.length;
     DATA.tareasRec.push({ n: nombre, desc, aplica, frec, veces, cuando, limite, bimestral, foto, fechaVariable, fechaIndividual, autoEval, evalPts, deleted: false });
-    inicializarSlotsNuevaTareaRec(idx);
+    // Los slots vacíos (recurrentes_estado/comentarios) se crean solo localmente aquí, para que
+    // la tarea se vea de inmediato en Recurrentes — NO se pre-insertan en Supabase: cada casilla
+    // se crea sola en Supabase con su primer valor real la primera vez que alguien la toque.
+    inicializarSlotsNuevaTareaRec(idxGuardado);
     toast('✓ Tarea recurrente creada');
   }
   closeOv('modal-tarea-rec');
-  programarAutoSave();
+  programarGuardadoTareaRecurrente(idxGuardado); // guardado individual: solo esta tarea del catálogo, ninguna otra se toca
   renderAdmin();
 }
 
@@ -449,7 +469,7 @@ function eliminarTareaRecurrente(idx) {
   if (!t) return;
   if (!confirm(`¿Eliminar "${t.n}"? Esta acción no borra su historial, solo la oculta de las tareas activas.`)) return;
   t.deleted = true; // marcar deleted, nunca eliminar físicamente (regla sección 5.13)
-  programarAutoSave();
+  programarGuardadoTareaRecurrente(idx); // guardado individual: solo esta tarea, ninguna otra del catálogo se toca
   renderAdmin();
   toast('Tarea recurrente eliminada');
 }
@@ -465,18 +485,17 @@ function iniciales(nombre) {
 function archivarAprobadas() {
   const aprobadas = DATA.tareasEve.filter(t => t.est === 'Aprobado');
   if (!aprobadas.length) { toast('No hay tareas aprobadas para archivar'); return; }
-  aprobadas.forEach(t => {
-    DATA.tareasArchivo.push({ ...t, archivedAt: fechaCortaCol() });
-    DATA.deletedEveIds.push(t.id);
-  });
+  const archivadas = aprobadas.map(t => ({ ...t, archivedAt: fechaCortaCol() }));
+  archivadas.forEach(t => DATA.tareasArchivo.push(t));
   DATA.tareasEve = DATA.tareasEve.filter(t => t.est !== 'Aprobado');
-  programarAutoSave();
+  guardarLocal();
+  archivadas.forEach(t => archivarTareaEnSupabase(t)); // guardado individual: solo estas tareas, ninguna otra se toca
   renderAdmin();
   toast(`📦 ${aprobadas.length} tareas archivadas`);
 }
 
-// Descarga la imagen de una URL remota (Firebase Storage) y la convierte a base64 para poder
-// insertarla en el PDF con jsPDF (addImage necesita base64, no una URL)
+// Descarga la imagen de una URL remota (URL firmada de Supabase Storage) y la convierte a
+// base64 para poder insertarla en el PDF con jsPDF (addImage necesita base64, no una URL)
 function urlADataURL(url) {
   return fetch(url)
     .then(r => r.blob())
@@ -490,8 +509,8 @@ function urlADataURL(url) {
 }
 
 // Descarga un PDF histórico POR CONJUNTO (con las fotos incrustadas) de los meses de Recurrentes
-// anteriores al mes elegido, y tras confirmar, borra esas fotos de Storage para liberar espacio.
-// Las casillas ✓ marcadas NUNCA se tocan — solo se elimina la imagen adjunta.
+// anteriores al mes elegido, y tras confirmar, borra esas fotos de Supabase Storage para liberar
+// espacio. Las casillas ✓ marcadas NUNCA se tocan — solo se elimina la imagen adjunta.
 async function purgarFotosRecurrentes() {
   if (typeof window.jspdf === 'undefined') { toast('Librería jsPDF no cargada'); return; }
   const corte = document.getElementById('corte-mes-fotos').value;
@@ -500,30 +519,33 @@ async function purgarFotosRecurrentes() {
   const mesesAPurgar = MESES.slice(0, corteIdx);
 
   const conjuntos = todosLosConjuntos();
-  const porConjunto = {};        // conj -> [{tarea, mes, slot, ts, nombre, comentarios, srcPromise}]
-  const paresConFotos = new Set(); // "conjunto|mes" que sí tienen alguna foto (para el borrado)
+  toast('Buscando fotos en Supabase Storage…');
 
-  toast('Preparando histórico de fotos…');
+  // Una sola consulta por carpeta (conjunto/mes) en vez de una por casilla — más rápido.
+  const porConjunto = {}; // conj -> [{tarea, mes, slot, ts, nombre, comentarios, ruta, bytes}]
 
-  conjuntos.forEach(c => {
-    mesesAPurgar.forEach(mes => {
-      tareasRecPara(c.n, mes).forEach(t => {
-        const veces = t.veces || 1;
-        const comentariosTarea = ((REC_COMS[c.n] && REC_COMS[c.n][t._idx]) || []).join(' | ');
-        for (let s = 0; s < veces; s++) {
-          const key = claveFoto(c.n, mes, t._idx, s);
-          const remotas = FOTOS_REMOTAS[key] || [];
-          const locales = (FOTOS_LOCAL[key] || []).filter(f => !remotas.some(r => r.nombre === f.nombre && r.ts === f.ts));
-          const todas = [...remotas.map(f => ({ nombre: f.nombre, ts: f.ts, srcPromise: urlADataURL(f.url) })),
-                         ...locales.map(f => ({ nombre: f.nombre, ts: f.ts, srcPromise: Promise.resolve(f.data) }))];
-          if (!todas.length) continue;
-          paresConFotos.add(`${c.n}|${mes}`);
-          porConjunto[c.n] = porConjunto[c.n] || [];
-          todas.forEach(f => porConjunto[c.n].push({ tarea: t.n, mes, slot: s + 1, ts: f.ts, nombre: f.nombre, comentarios: comentariosTarea, srcPromise: f.srcPromise }));
-        }
+  for (const c of conjuntos) {
+    for (const mes of mesesAPurgar) {
+      const carpeta = `${c.n}/${mes}`;
+      const { data, error } = await SB.storage.from(SUPABASE_FOTOS_BUCKET).list(carpeta);
+      if (error || !data || !data.length) continue;
+      const tareas = tareasRecPara(c.n, mes);
+      data.forEach(f => {
+        const m = f.name.match(/^(\d+)_(\d+)_(\d+)\.jpg$/);
+        if (!m) return;
+        const tareaIdx = parseInt(m[1], 10);
+        const slotIdx = parseInt(m[2], 10);
+        const tarea = tareas.find(t => t._idx === tareaIdx);
+        const comentariosTarea = ((REC_COMS[c.n] && REC_COMS[c.n][tareaIdx]) || []).join(' | ');
+        porConjunto[c.n] = porConjunto[c.n] || [];
+        porConjunto[c.n].push({
+          tarea: tarea ? tarea.n : `Tarea #${tareaIdx}`, mes, tareaIdx, slotIdx, slot: slotIdx + 1,
+          ts: f.created_at ? new Date(f.created_at).toLocaleString('es-CO') : '',
+          nombre: f.name, comentarios: comentariosTarea, ruta: `${carpeta}/${f.name}`, bytes: (f.metadata && f.metadata.size) || 0
+        });
       });
-    });
-  });
+    }
+  }
 
   const conjuntosConFotos = Object.keys(porConjunto);
   if (!conjuntosConFotos.length) { toast(`No hay fotos en Recurrentes antes de ${corte}`); return; }
@@ -533,7 +555,10 @@ async function purgarFotosRecurrentes() {
 
   for (const conj of conjuntosConFotos) {
     const items = porConjunto[conj];
-    const srcs = await Promise.all(items.map(it => it.srcPromise));
+    const srcs = await Promise.all(items.map(async it => {
+      const { data: firmada } = await SB.storage.from(SUPABASE_FOTOS_BUCKET).createSignedUrl(it.ruta, 300);
+      return firmada ? urlADataURL(firmada.signedUrl) : null;
+    }));
 
     const doc = new jsPDF();
     if (LOGO_BASE64) {
@@ -576,39 +601,38 @@ async function purgarFotosRecurrentes() {
   if (!confirm(`Se descargó el histórico de fotos de Recurrentes anteriores a ${corte} (${conjuntosConFotos.length} PDF(s), uno por conjunto).\n\n¿Borrar estas fotos de Storage para liberar espacio? Las casillas ✓ marcadas NO se ven afectadas, solo se elimina la imagen. No se puede deshacer — el respaldo queda solo en los PDFs descargados.`)) return;
 
   let bytesLiberados = 0;
-  const tareasEliminarPromesas = [];
+  const slotsAfectados = []; // [{conjunto, mes, tareaIdx, slotIdx}] — solo estas casillas puntuales se re-guardan
+  const rutasABorrar = [];
 
-  paresConFotos.forEach(par => {
-    const [conjunto, mes] = par.split('|');
-    const nodoRuta = `${DB_FOTOS}/${conjunto}/${mes}`.replace(/\s+/g, '_');
-
-    // Local: limpiar FOTOS_LOCAL/FOTOS_REMOTAS de ese conjunto+mes y resetear hasFoto/fotoCount
-    Object.keys(FOTOS_LOCAL).concat(Object.keys(FOTOS_REMOTAS)).forEach(key => {
-      if (!key.startsWith(`${conjunto}|${mes}|`)) return;
+  conjuntosConFotos.forEach(conjunto => {
+    porConjunto[conjunto].forEach(it => {
+      bytesLiberados += it.bytes;
+      rutasABorrar.push(it.ruta);
+      const key = claveFoto(conjunto, it.mes, it.tareaIdx, it.slotIdx);
       delete FOTOS_LOCAL[key];
-      delete FOTOS_REMOTAS[key];
-      const [, , tareaIdx, slotIdx] = key.split('|');
-      const slot = ESTADO[conjunto] && ESTADO[conjunto][mes] && ESTADO[conjunto][mes][tareaIdx] && ESTADO[conjunto][mes][tareaIdx][slotIdx];
-      if (slot) { slot.hasFoto = false; slot.fotoCount = 0; }
+      const slot = ESTADO[conjunto] && ESTADO[conjunto][it.mes] && ESTADO[conjunto][it.mes][it.tareaIdx] && ESTADO[conjunto][it.mes][it.tareaIdx][it.slotIdx];
+      if (slot) {
+        slot.hasFoto = false;
+        slot.fotoCount = 0;
+        slotsAfectados.push({ conjunto, mes: it.mes, tareaIdx: it.tareaIdx, slotIdx: it.slotIdx });
+      }
     });
-
-    // Remoto: listar y borrar cada archivo real de Storage + el nodo de metadatos en Database
-    if (FB_STORAGE && FB_FOTOS_REF) {
-      const p = FB_STORAGE.ref(nodoRuta).listAll()
-        .then(res => Promise.all(res.items.map(itemRef =>
-          itemRef.getMetadata().then(meta => { bytesLiberados += meta.size || 0; return itemRef.delete(); }).catch(() => {})
-        )))
-        .then(() => firebase.database().ref(nodoRuta).remove())
-        .catch(err => console.error('Error borrando fotos de', nodoRuta, err));
-      tareasEliminarPromesas.push(p);
-    }
   });
 
   guardarFotosLocal();
-  await Promise.all(tareasEliminarPromesas);
-  if (bytesLiberados > 0) ajustarContadorFotos(-bytesLiberados);
+  guardarLocal();
 
-  programarAutoSave();
+  if (rutasABorrar.length) {
+    const { error } = await SB.storage.from(SUPABASE_FOTOS_BUCKET).remove(rutasABorrar);
+    if (error) console.error('Error borrando fotos de Supabase Storage', error.message);
+  }
+  if (bytesLiberados > 0) {
+    await SB.rpc('ajustar_contador', { p_clave: 'fotos_bytes', p_delta: -bytesLiberados });
+    await cargarContadorFotos();
+  }
+
+  // Guardado individual: solo las casillas que de verdad tenían foto y se limpiaron, ninguna otra se toca
+  slotsAfectados.forEach(s => guardarEstadoSlotEnSupabase(s.conjunto, s.mes, s.tareaIdx, s.slotIdx));
   renderAdmin();
   if (typeof renderRecurrentes === 'function') renderRecurrentes();
   toast('🗑 Fotos borradas, espacio liberado');
@@ -665,14 +689,15 @@ function descargarInformeArchivo() {
 
   if (confirm(`Se descargaron ${DATA.tareasArchivo.length} tareas archivadas (${Object.keys(porConjunto).length} PDFs, uno por conjunto).\n\n¿Vaciar el archivo interno ahora que ya quedó respaldado? Esto libera espacio en la app. No se puede deshacer dentro de GestiónPH — el respaldo queda solo en los PDFs descargados.`)) {
     DATA.tareasArchivo = [];
-    programarAutoSave();
+    guardarLocal();
+    vaciarArchivoEnSupabase(); // borrado total intencional: el usuario ya confirmó que respaldó todo en PDF
     renderAdmin();
     toast('🗑 Archivo interno vaciado');
   }
 }
 
 function limpiarCacheLocal() {
-  if (!confirm('¿Limpiar caché local? Esto no afecta los datos en Firebase.')) return;
+  if (!confirm('¿Limpiar caché local? Esto no afecta los datos en Supabase.')) return;
   localStorage.removeItem(LOCAL_STORAGE_KEY);
   toast('🗑 Caché local limpiado');
 }
@@ -805,7 +830,7 @@ function guardarFechaGlobal(nombre, iso) {
   const mes = getMes();
   const fecha = isoAFechaCorta(iso);
   setFechaLimiteRecGlobal(mes, nombre, fecha);
-  programarAutoSave();
+  programarGuardadoFechaGlobal(mes, nombre); // guardado individual: solo esta fecha, ninguna otra se toca
   toast(fecha ? `✓ Fecha de "${nombre}" fijada: ${fecha}` : 'Fecha borrada');
 }
 

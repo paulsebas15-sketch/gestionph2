@@ -205,32 +205,39 @@ function guardarEvento() {
   const usuario = usuarioActual();
   const editId = document.getElementById('ev-edit-id').value;
 
+  const idsGuardados = [];
   if (editId) {
     const e = DATA.eventosCalendario.find(e => e.id === editId);
     if (!e || !puedeEditarEvento(e)) { toast('No puedes editar este evento'); return; }
     const conjunto = esCapacitacion ? null : (conjuntosMarcados[0] || null);
     Object.assign(e, { tipo, conjunto, titulo, fecha, hora, descripcion, participantes });
+    idsGuardados.push(editId);
     if (tipo === 'Reunión de consejo' && conjunto) sincronizarFechaConsejo(conjunto, fecha);
     toast('✓ Evento actualizado');
   } else if (esCapacitacion) {
+    const id = siguienteIdEvento();
     DATA.eventosCalendario.push({
-      id: siguienteIdEvento(), tipo, conjunto: null, titulo, fecha, hora, descripcion, participantes,
+      id, tipo, conjunto: null, titulo, fecha, hora, descripcion, participantes,
       creadoPor: usuario ? usuario.n : '', createdAt: Date.now()
     });
+    idsGuardados.push(id);
     toast('✓ Evento creado');
   } else {
     conjuntosMarcados.forEach(conjunto => {
+      const id = siguienteIdEvento();
       DATA.eventosCalendario.push({
-        id: siguienteIdEvento(), tipo, conjunto, titulo, fecha, hora, descripcion, participantes: [],
+        id, tipo, conjunto, titulo, fecha, hora, descripcion, participantes: [],
         creadoPor: usuario ? usuario.n : '', createdAt: Date.now()
       });
+      idsGuardados.push(id);
       if (tipo === 'Reunión de consejo') sincronizarFechaConsejo(conjunto, fecha);
     });
     toast(`✓ Evento creado en ${conjuntosMarcados.length} conjunto(s)`);
   }
 
   closeOv('modal-evento');
-  programarAutoSave();
+  guardarLocal();
+  idsGuardados.forEach(id => guardarEventoEnSupabase(id)); // guardado individual: solo estos eventos, ninguno más se toca
   renderCalendario();
 }
 
@@ -241,7 +248,8 @@ function eliminarEvento() {
   if (!confirm(`¿Eliminar el evento "${e.titulo || e.tipo}"?`)) return;
   DATA.eventosCalendario = DATA.eventosCalendario.filter(ev => ev.id !== editId);
   closeOv('modal-evento');
-  programarAutoSave();
+  guardarLocal();
+  eliminarEventoEnSupabase(editId); // guardado individual: solo borra este evento
   renderCalendario();
   toast('Evento eliminado');
 }
@@ -259,7 +267,10 @@ function sincronizarFechaConsejo(conjunto, fechaIso) {
   const fechaReunion = fechaIsoADate(fechaIso);
 
   const idx = DATA.tareasRec.findIndex(t => t.n === 'Reunión de consejo de adm.' && !t.deleted && (t.aplica === tipo || t.aplica === 'Todos'));
-  if (idx >= 0) setFechaLimiteRec(conjunto, mes, idx, isoAFechaCorta(fechaIso));
+  if (idx >= 0) {
+    setFechaLimiteRec(conjunto, mes, idx, isoAFechaCorta(fechaIso));
+    programarGuardadoFechaLimite(conjunto, mes, idx); // guardado individual: solo esta fecha, ninguna otra se toca
+  }
 
   if (tipo !== 'Definitivos' || !fechaReunion) return;
 
@@ -270,11 +281,13 @@ function sincronizarFechaConsejo(conjunto, fechaIso) {
   if (idxInforme >= 0) {
     const fechaInforme = restarDiasHabiles(fechaReunion, 5);
     setFechaLimiteRec(conjunto, mes, idxInforme, fechaCortaDesdeDate(fechaInforme));
+    programarGuardadoFechaLimite(conjunto, mes, idxInforme); // guardado individual: solo esta fecha, ninguna otra se toca
   }
 
   const idxActa = DATA.tareasRec.findIndex(t => t.n === 'Envío acta de reunión de consejo' && !t.deleted && (t.aplica === tipo || t.aplica === 'Todos'));
   if (idxActa >= 0) {
     const fechaActa = sumarDiasHabiles(fechaReunion, 3);
     setFechaLimiteRec(conjunto, mes, idxActa, fechaCortaDesdeDate(fechaActa));
+    programarGuardadoFechaLimite(conjunto, mes, idxActa); // guardado individual: solo esta fecha, ninguna otra se toca
   }
 }

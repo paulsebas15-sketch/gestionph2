@@ -1,19 +1,7 @@
-// config.js — Constantes globales, configuración Firebase, helpers de fecha
+// config.js — Constantes globales, configuración Supabase, helpers de fecha
 // GestiónPH v2.0 · A&V Victoria Pineda Administraciones
 
-// ─── FIREBASE ───────────────────────────────────────────────
-// Proyecto real: gestion-ph-ayv-2 (Realtime Database + Storage)
-const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyCNsOShv5331I7P_Av-frQk_nqH3MBout4",
-  authDomain: "gestion-ph-ayv-2.firebaseapp.com",
-  databaseURL: "https://gestion-ph-ayv-2-default-rtdb.firebaseio.com",
-  projectId: "gestion-ph-ayv-2",
-  storageBucket: "gestion-ph-ayv-2.firebasestorage.app",
-  messagingSenderId: "19543863402",
-  appId: "1:19543863402:web:fb3eeea978526d3cc01a13"
-};
-
-// ─── SUPABASE (reemplazo de Firebase en curso) ─────────────────
+// ─── SUPABASE (único backend — datos y fotos) ──────────────────
 // Solo la URL y la clave "publishable" (pública) — NUNCA la clave secreta, que da acceso total
 // sin pasar por las reglas de seguridad (RLS). Esta clave pública sí es segura de tener aquí:
 // su único poder es lo que las reglas RLS le permitan a cada usuario autenticado.
@@ -23,16 +11,13 @@ const SUPABASE_ANON_KEY = 'sb_publishable_zWJGwbGwyCkZAYF5iLYheg_JziQlXAt';
 // invisible para el usuario, que sigue iniciando sesión solo con su cédula
 const AUTH_EMAIL_DOMINIO = 'usuarios-gestionph.com';
 
-const DB_PATH = 'gestionph';           // nodo raíz en Firebase
-const DB_FOTOS = 'gestionph_fotos';    // fotos separadas (no infla el payload principal)
-const DB_CONTADOR_FOTOS = 'contadores/fotosBytes'; // suma de bytes subidos a Storage, para la barra de uso
+const SUPABASE_FOTOS_BUCKET = 'recurrentes-fotos'; // bucket privado en Supabase Storage (RLS por conjunto)
 const LIMITE_DATOS_MB = 500;    // 500MB — límite gratis de la base de datos de Supabase (plan Free)
-const LIMITE_FOTOS_MB = 5120;   // 5GB — límite gratis de Storage (plan Blaze, antes de cobrar)
+const LIMITE_FOTOS_MB = 1024;   // 1GB — límite gratis de Storage en Supabase (plan Free)
 const FOTO_MAX_ANCHO = 1600;    // px — ancho máximo al comprimir fotos antes de subir
 const FOTO_CALIDAD = 0.7;       // calidad JPEG al comprimir (0-1)
 const DATA_VERSION = 20260721;
-const SAVE_DELAY = 600;                // ms debounce autoSave
-const FB_RENDER_DELAY = 800;           // ms throttle re-render tras snapshot remoto
+const SAVE_DELAY = 600;                // ms debounce de guardado individual
 const LOCAL_STORAGE_KEY = 'gestionph_v3';
 const SESSION_KEY = 'gph_session';
 const BACKUP_KEY = 'gph_lastBackup';

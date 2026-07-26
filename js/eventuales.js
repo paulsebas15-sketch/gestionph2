@@ -1,6 +1,6 @@
 // eventuales.js — CRUD tareas eventuales, estados, filtros, semáforo, multi-conjunto
 // GestiónPH v2.0
-// Depende de: config.js, datos.js, ui.js, firebase.js
+// Depende de: config.js, datos.js, ui.js
 
 const PAGINA_TAMANO = 50;
 let PAGINA_ACTUAL_EVE = 1;
@@ -210,6 +210,7 @@ function crearTareaEventual() {
   const reg = fechaCortaCol();
   const usuario = usuarioActual();
 
+  const idsCreados = [];
   conjuntosSeleccionados.forEach(conj => {
     const id = siguienteIdEventual();
     DATA.tareasEve.push({
@@ -219,11 +220,13 @@ function crearTareaEventual() {
       pri: prioridad, est: 'Nuevo', estUpdAt: Date.now(), creadoEn: Date.now(),
       reg, vence, coms: []
     });
+    idsCreados.push(id);
   });
 
   clearForm('form-nueva-eve');
   closeOv('modal-nueva-eve');
-  programarAutoSave();
+  guardarLocal();
+  idsCreados.forEach(id => guardarTareaEventualEnSupabase(id)); // guardado individual: solo estas tareas nuevas, ninguna otra se toca
   tomarSnapshotEventuales(); // tarea nueva sí debe aparecer de inmediato
   renderEventuales();
   updBadge();
@@ -301,7 +304,7 @@ function cambiarEstadoEventual(id, nuevoEstado) {
   t.coms = t.coms || [];
   t.coms.push(`${comentario.trim()} - ${usuario ? usuario.n : '—'} ${fechaCortaCol()}`);
 
-  programarAutoSave();
+  programarGuardadoEventual(id); // guardado individual: solo esta tarea, ninguna otra se toca
   abrirDetalleEventual(id);
   renderEventuales();
   updBadge();
@@ -317,15 +320,17 @@ function enviarComentarioEventual() {
   const usuario = usuarioActual();
   t.coms = t.coms || [];
   t.coms.push(`${texto} - ${usuario ? usuario.n : '—'} ${fechaCortaCol()}`);
-  programarAutoSave();
+  programarGuardadoEventual(id); // guardado individual: solo esta tarea, ninguna otra se toca
   abrirDetalleEventual(id);
 }
 
-// Eliminar tarea (solo admin) — se agrega a deletedEveIds, nunca se elimina físicamente del historial de merge
+// Eliminar tarea (solo admin) — se borra de verdad en Supabase (antes solo desaparecía
+// localmente para quien la borraba, ver hallazgo de sincronización: eliminarEventual no tenía
+// ningún botón conectado en la interfaz todavía, no afectaba a nadie en producción)
 function eliminarEventual(id) {
   DATA.tareasEve = DATA.tareasEve.filter(t => t.id !== id);
-  DATA.deletedEveIds.push(id);
-  programarAutoSave();
+  guardarLocal();
+  eliminarEventualEnSupabase(id);
   tomarSnapshotEventuales();
   renderEventuales();
   updBadge();

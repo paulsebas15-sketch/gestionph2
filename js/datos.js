@@ -46,10 +46,6 @@ function obtenerFechaTareaRec(conjunto, mes, tarea) {
   return getFechaLimiteRec(conjunto, mes, tarea._idx);
 }
 
-let _fbDataReceived = false; // true tras el primer snapshot real de Firebase (evita pisar Firebase con datos vacíos)
-let pendingSync = false;
-let _restoringUntil = 0;
-
 // ─── HELPERS DE ACCESO ───────────────────────────────────────
 
 // Lista de todos los conjuntos activos (def + pro) como array plano de objetos.
@@ -156,7 +152,7 @@ function siguienteIdEvento() {
   return `EV-${String(max + 1).padStart(3, '0')}`;
 }
 
-// ─── SNAPSHOT (para Firebase / backup) ───────────────────────
+// ─── SNAPSHOT (para exportar/restaurar backup) ───────────────
 function buildSnapshot() {
   return {
     ts: Date.now(),

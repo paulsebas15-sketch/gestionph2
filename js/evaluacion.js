@@ -287,13 +287,13 @@ function guardarItemManualEval(conjunto, mes, inputEl) {
   const valor = Math.min(Math.max(parseFloat(inputEl.value) || 0, 0), peso);
   const manualData = ensureEvalManual(conjunto, mes);
   manualData.tareas[tarea] = valor;
-  programarAutoSave();
+  programarGuardadoEvalManual(conjunto, mes); // guardado individual: solo este conjunto/mes, ninguna otra evaluación se toca
   renderEvaluacion();
 }
 
 function guardarAsistenciaEval(conjunto, mes, valor) {
   const manualData = ensureEvalManual(conjunto, mes);
   manualData.asistencia = valor.trim();
-  programarAutoSave();
+  programarGuardadoEvalManual(conjunto, mes); // guardado individual: solo este conjunto/mes, ninguna otra evaluación se toca
   renderEvaluacion();
 }

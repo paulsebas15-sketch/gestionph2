@@ -1,9 +1,41 @@
-// supabase.js — Cliente Supabase y autenticación por cédula
+// supabase.js — Cliente Supabase: auth por cédula, datos y fotos (Storage)
 // GestiónPH v2.0
 // Depende de: config.js
-// Reemplaza gradualmente a firebase.js — mientras dura la migración, ambos pueden coexistir.
+// Único backend de la app — Firebase se quitó por completo (datos y fotos ya viven aquí).
 
 const SB = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+function actualizarIndicadorSync(estado) {
+  if (typeof renderSyncIndicator === 'function') renderSyncIndicator(estado);
+  // Protección offline: cada función de guardado individual llama aquí con 'offline' si falló
+  // (sin internet) o 'synced' si un guardado posterior sí llegó — así se sabe en todo momento
+  // si hay algún cambio que quedó SOLO local, sin haber llegado a Supabase todavía. Se guarda
+  // también en localStorage (no solo en memoria) para que la marca sobreviva a un cierre/recarga
+  // completo del navegador — así se puede avisar al reabrir, no solo en la misma sesión.
+  HAY_CAMBIOS_SIN_SINCRONIZAR = estado === 'offline';
+  if (estado === 'offline') localStorage.setItem(PENDIENTE_OFFLINE_KEY, '1');
+  else if (estado === 'synced') localStorage.removeItem(PENDIENTE_OFFLINE_KEY);
+}
+
+const PENDIENTE_OFFLINE_KEY = 'gph_pendiente_offline';
+let HAY_CAMBIOS_SIN_SINCRONIZAR = false;
+
+// Si se intenta cerrar/recargar la pestaña con un cambio que no llegó a subir, se avisa antes
+// de perderlo — no hay merge al reconectar con guardado quirúrgico, así que la única protección
+// real es no dejar salir sin avisar.
+window.addEventListener('beforeunload', e => {
+  if (!HAY_CAMBIOS_SIN_SINCRONIZAR) return;
+  e.preventDefault();
+  e.returnValue = 'Tienes un cambio que no se pudo guardar (sin conexión). Si sales ahora, se puede perder.';
+});
+
+// Al recuperar conexión, avisa para que la persona vuelva a intentar la última acción — no se
+// reintenta sola para evitar reenviar datos con información desactualizada.
+window.addEventListener('online', () => {
+  if (HAY_CAMBIOS_SIN_SINCRONIZAR && typeof toast === 'function') {
+    toast('🌐 Conexión recuperada — repite el último cambio si no alcanzó a guardarse', 6000);
+  }
+});
 
 // Cada cédula obtiene una cuenta real de Supabase Auth por detrás — correo/clave derivados,
 // invisibles para el usuario (sigue usando solo su cédula para entrar).
@@ -74,6 +106,16 @@ async function provisionarUsuariosSupabase() {
 // DATA/ESTADO/REC_COMS/EVAL_MANUAL/FECHAS_LIMITE_REC como siempre.
 // ═══════════════════════════════════════════════════════════════
 function tsMs(iso) { return iso ? new Date(iso).getTime() : undefined; }
+
+// Trae el contador real de bytes usados en el bucket de fotos (tabla contadores, fila
+// 'fotos_bytes') — alimenta la barra de capacidad en Admin.
+async function cargarContadorFotos() {
+  const { data, error } = await SB.from('contadores').select('valor').eq('clave', 'fotos_bytes').single();
+  if (!error && data) {
+    CONTADOR_FOTOS_BYTES = data.valor || 0;
+    if (PESTANA_ACTUAL === 'admin' && typeof renderAdmin === 'function') renderAdmin();
+  }
+}
 
 async function cargarTodoDesdeSupabase() {
   const [
@@ -203,17 +245,482 @@ async function cargarTodoDesdeSupabase() {
   return { ok: true };
 }
 
-// ═══════════════════════════════════════════════════════════════
-// GUARDADO: empuja lo que hay en memoria de vuelta a Supabase, tabla por tabla. RLS rechaza
-// solo cualquier fila fuera del alcance del usuario actual (protección real, no solo de la app).
-// ═══════════════════════════════════════════════════════════════
 function isoODefecto(ms) { return ms ? new Date(ms).toISOString() : null; }
 
-async function guardarTodoEnSupabase() {
-  const snap = buildSnapshot();
-  const tareas = [];
+// ═══════════════════════════════════════════════════════════════
+// GUARDADO QUIRÚRGICO — catálogo de tareas recurrentes (tareas_recurrentes_catalogo)
+// Cada tarea se guarda de forma individual e independiente de las demás: crear/editar/eliminar
+// una tarea NUNCA toca ni reenvía las filas de las otras tareas del catálogo. Solo Staff puede
+// escribir esta tabla (RLS), igual que antes.
+// ═══════════════════════════════════════════════════════════════
+function filaCatalogoRec(t) {
+  return {
+    nombre: t.n, descripcion: t.desc, aplica: t.aplica, frecuencia: t.frec,
+    veces: t.veces, cuando: t.cuando, limite: t.limite, bimestral: !!t.bimestral, foto: !!t.foto,
+    fecha_variable: !!t.fechaVariable, fecha_individual: !!t.fechaIndividual,
+    auto_eval: !!t.autoEval, eval_pts: t.evalPts, deleted: !!t.deleted
+  };
+}
 
-  const tareasEveRows = snap.tareasEve.map(t => ({
+let _recCatTimers = {}; // debounce por tarea (índice local) — una ráfaga de ediciones a LA MISMA tarea no dispara varios guardados sueltos
+async function guardarTareaRecurrenteEnSupabase(idx) {
+  if (!esStaff()) return; // RLS rechazaría de todos modos, evita la llamada
+  const t = DATA.tareasRec[idx];
+  if (!t) return;
+
+  if (t._supabaseId) {
+    const { error } = await SB.from('tareas_recurrentes_catalogo').update(filaCatalogoRec(t)).eq('id', t._supabaseId);
+    if (error) {
+      console.error('Error actualizando tarea recurrente en Supabase:', error.message);
+      actualizarIndicadorSync('offline');
+      return;
+    }
+  } else {
+    // Tarea nueva: se inserta y se guarda el id real que asigna Supabase, para que las
+    // próximas ediciones de ESTA tarea usen update() en vez de intentar insertarla de nuevo.
+    const { data, error } = await SB.from('tareas_recurrentes_catalogo').insert(filaCatalogoRec(t)).select('id').single();
+    if (error) {
+      console.error('Error insertando tarea recurrente nueva en Supabase:', error.message);
+      actualizarIndicadorSync('offline');
+      return;
+    }
+    t._supabaseId = data.id;
+  }
+  actualizarIndicadorSync('synced');
+}
+
+function programarGuardadoTareaRecurrente(idx) {
+  guardarLocal();
+  clearTimeout(_recCatTimers[idx]);
+  _recCatTimers[idx] = setTimeout(() => guardarTareaRecurrenteEnSupabase(idx), SAVE_DELAY);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GUARDADO QUIRÚRGICO — usuarios + delegado_conjuntos
+// Crear/editar/(des)activar UN usuario nunca toca la fila de otro. Reasignar el delegado de
+// UN conjunto solo borra/inserta las 2 filas puntuales de delegado_conjuntos que cambiaron
+// (el delegado que lo pierde, el que lo gana) — el resto de asignaciones de cualquier otro
+// delegado/conjunto queda intacto. auth_id NUNCA se manda desde el cliente: lo asigna solo
+// el trigger de Supabase (ver supabase_trigger_vincular_auth.sql) en el primer login real.
+// ═══════════════════════════════════════════════════════════════
+function filaUsuario(u, cedula, activo) {
+  return {
+    nombre: u.n, cedula, rol: u.rol, cargo: u.cargo || null, equipo: u.equipo || null,
+    avatar: u.av || null, color: u.c || null, activo: activo !== false
+  };
+}
+
+let _usuarioTimers = {}; // debounce por índice local de usuario
+async function guardarUsuarioEnSupabase(idx) {
+  if (!esStaff()) return;
+  const u = DATA.usuarios[idx];
+  if (!u) return;
+  const cedula = cedulaPorIdxUsuario(idx);
+  if (!cedula) return;
+  const activo = DATA.cedulas[cedula] ? DATA.cedulas[cedula].activo : true;
+  const row = filaUsuario(u, cedula, activo);
+
+  if (u._supabaseId) {
+    const { error } = await SB.from('usuarios').update(row).eq('id', u._supabaseId);
+    if (error) {
+      console.error('Error actualizando usuario en Supabase:', error.message);
+      actualizarIndicadorSync('offline');
+      return;
+    }
+  } else {
+    const { data, error } = await SB.from('usuarios').insert(row).select('id').single();
+    if (error) {
+      console.error('Error insertando usuario nuevo en Supabase:', error.message);
+      actualizarIndicadorSync('offline');
+      return;
+    }
+    u._supabaseId = data.id;
+  }
+  actualizarIndicadorSync('synced');
+}
+
+function programarGuardadoUsuario(idx) {
+  guardarLocal();
+  clearTimeout(_usuarioTimers[idx]);
+  _usuarioTimers[idx] = setTimeout(() => guardarUsuarioEnSupabase(idx), SAVE_DELAY);
+}
+
+// Diff quirúrgico de la asignación delegado↔conjunto: solo borra la fila (delegadoAnterior,
+// conjunto) y solo inserta la fila (delegadoNuevo, conjunto). Ninguna otra fila de la tabla
+// se toca. Si algún delegado involucrado todavía no tiene _supabaseId (recién creado en esta
+// misma sesión y aún no confirmado por Supabase), se guarda primero para poder enlazarlo.
+async function sincronizarAsignacionConjunto(conjuntoNombre, delegadoAnteriorNombre, delegadoNuevoNombre) {
+  if (!esStaff()) return;
+  if ((delegadoAnteriorNombre || '—') === (delegadoNuevoNombre || '—')) return; // no cambió nada, no se toca la tabla
+
+  async function idDelegado(nombre) {
+    if (!nombre || nombre === '—') return null;
+    const idx = DATA.usuarios.findIndex(u => u.n === nombre);
+    if (idx < 0) return null;
+    if (!DATA.usuarios[idx]._supabaseId) await guardarUsuarioEnSupabase(idx); // asegura que exista antes de enlazarlo
+    return DATA.usuarios[idx]._supabaseId || null;
+  }
+
+  const [idAnterior, idNuevo] = await Promise.all([idDelegado(delegadoAnteriorNombre), idDelegado(delegadoNuevoNombre)]);
+  const tareas = [];
+  if (idAnterior) tareas.push(SB.from('delegado_conjuntos').delete().eq('usuario_id', idAnterior).eq('conjunto', conjuntoNombre));
+  if (idNuevo) tareas.push(SB.from('delegado_conjuntos').upsert({ usuario_id: idNuevo, conjunto: conjuntoNombre }, { onConflict: 'usuario_id,conjunto' }));
+
+  const resultados = await Promise.all(tareas);
+  const errores = resultados.filter(r => r && r.error);
+  if (errores.length) {
+    console.error('Error sincronizando asignación de conjunto:', errores.map(e => e.error.message));
+    actualizarIndicadorSync('offline');
+    return;
+  }
+  actualizarIndicadorSync('synced');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GUARDADO QUIRÚRGICO — conjuntos
+// Crear/editar UN conjunto nunca toca la fila de otro. Renombrar usa UPDATE sobre la fila
+// existente (no INSERT+huérfano): gracias a ON UPDATE CASCADE (ver
+// supabase_cascade_conjuntos.sql) el nuevo nombre se propaga solo a las 7 tablas que lo
+// referencian, sin que la app tenga que reenviar esos datos.
+// ═══════════════════════════════════════════════════════════════
+function filaConjunto(c, tipo) {
+  return { tipo, delegado: c.del, color: c.c, eval: c.eval || {}, cartera: c.cartera || {}, deleted: !!c.deleted };
+}
+
+async function guardarConjuntoEnSupabase(nombreAnterior, nombreNuevo, c, tipo) {
+  if (!esStaff()) return;
+  const datos = filaConjunto(c, tipo);
+  if (!nombreAnterior) {
+    const { error } = await SB.from('conjuntos').insert({ nombre: nombreNuevo, ...datos });
+    if (error) {
+      console.error('Error insertando conjunto nuevo en Supabase:', error.message);
+      actualizarIndicadorSync('offline');
+      return;
+    }
+  } else {
+    const { error } = await SB.from('conjuntos').update({ nombre: nombreNuevo, ...datos }).eq('nombre', nombreAnterior);
+    if (error) {
+      console.error('Error actualizando conjunto en Supabase:', error.message);
+      actualizarIndicadorSync('offline');
+      return;
+    }
+  }
+  actualizarIndicadorSync('synced');
+}
+
+async function eliminarConjuntoEnSupabase(nombre) {
+  if (!esStaff()) return;
+  const { error } = await SB.from('conjuntos').update({ deleted: true }).eq('nombre', nombre);
+  if (error) {
+    console.error('Error eliminando conjunto en Supabase:', error.message);
+    actualizarIndicadorSync('offline');
+    return;
+  }
+  actualizarIndicadorSync('synced');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GUARDADO QUIRÚRGICO — tareas eventuales (tareas_eventuales)
+// Crear, cambiar estado, comentar, aprobar/devolver/validar: cada acción guarda SOLO la fila
+// de esa tarea puntual — ninguna otra tarea eventual (de ese conjunto o de otro) se toca. El id
+// (T-XXX) ya se genera en el cliente antes de guardar, así que upsert() sirve para crear y
+// editar por igual, sin necesitar el paso extra de "esperar el id real" que sí hace falta en
+// catálogo/usuarios/conjuntos (esas tablas usan id autogenerado por Supabase).
+// ═══════════════════════════════════════════════════════════════
+function filaEventual(t) {
+  return {
+    conjunto: t.conj, nombre: t.n, obs: t.obs, tipo: t.tipo, encargado: t.enc,
+    registrado_por: t.ra, aprobador: t.apr, prioridad: t.pri, estado: t.est,
+    est_upd_at: isoODefecto(t.estUpdAt), registrada: t.reg, vence: t.vence,
+    creado_en: isoODefecto(t.creadoEn), en_proceso_en: isoODefecto(t.enProcesoEn),
+    finalizado_en: isoODefecto(t.finalizadoEn), aprobado_en: isoODefecto(t.aprobadoEn),
+    comentarios: t.coms || []
+  };
+}
+
+let _eventualTimers = {}; // debounce por id — varios comentarios/cambios seguidos a LA MISMA tarea no disparan guardados sueltos
+async function guardarTareaEventualEnSupabase(id) {
+  const t = DATA.tareasEve.find(t => t.id === id);
+  if (!t) return;
+  const { error } = await SB.from('tareas_eventuales').upsert({ id: t.id, ...filaEventual(t) });
+  if (error) {
+    console.error('Error guardando tarea eventual en Supabase:', error.message);
+    actualizarIndicadorSync('offline');
+    return;
+  }
+  actualizarIndicadorSync('synced');
+}
+
+function programarGuardadoEventual(id) {
+  guardarLocal();
+  clearTimeout(_eventualTimers[id]);
+  _eventualTimers[id] = setTimeout(() => guardarTareaEventualEnSupabase(id), SAVE_DELAY);
+}
+
+async function eliminarEventualEnSupabase(id) {
+  if (!esStaff()) return; // RLS: solo Staff puede borrar de verdad (eventuales_borrar)
+  const { error } = await SB.from('tareas_eventuales').delete().eq('id', id);
+  if (error) {
+    console.error('Error eliminando tarea eventual en Supabase:', error.message);
+    actualizarIndicadorSync('offline');
+    return;
+  }
+  actualizarIndicadorSync('synced');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GUARDADO QUIRÚRGICO — archivo de tareas (tareas_archivo)
+// Archivar es, por naturaleza, una acción sobre VARIAS tareas a la vez (todas las Aprobadas del
+// momento) — pero cada una se guarda como su propia fila individual: insertar en archivo +
+// borrar de eventuales, tarea por tarea. Ninguna tarea que NO se estaba archivando se toca.
+// Vaciar el archivo interno SÍ es un borrado total intencional (el usuario ya confirmó que
+// respaldó todo en PDF) — no es "tocar algo que no cambió", es la acción explícita de esa fila.
+// ═══════════════════════════════════════════════════════════════
+async function archivarTareaEnSupabase(t) {
+  if (!esStaff()) return;
+  const row = {
+    id: t.id, conjunto: t.conj, nombre: t.n, obs: t.obs, tipo: t.tipo, estado: t.est,
+    creado_en: isoODefecto(t.creadoEn), finalizado_en: isoODefecto(t.finalizadoEn),
+    aprobado_en: isoODefecto(t.aprobadoEn), comentarios: t.coms || [], archivado_en: t.archivedAt
+  };
+  const { error: errorInsert } = await SB.from('tareas_archivo').insert(row);
+  if (errorInsert) {
+    console.error('Error archivando tarea en Supabase:', errorInsert.message);
+    actualizarIndicadorSync('offline');
+    return;
+  }
+  const { error: errorDelete } = await SB.from('tareas_eventuales').delete().eq('id', t.id);
+  if (errorDelete) {
+    console.error('Error borrando tarea eventual archivada en Supabase:', errorDelete.message);
+    actualizarIndicadorSync('offline');
+    return;
+  }
+  actualizarIndicadorSync('synced');
+}
+
+async function vaciarArchivoEnSupabase() {
+  if (!esStaff()) return;
+  const { error } = await SB.from('tareas_archivo').delete().gt('id', ''); // borra todas las filas (todos los ids empiezan con "T-")
+  if (error) {
+    console.error('Error vaciando archivo en Supabase:', error.message);
+    actualizarIndicadorSync('offline');
+    return;
+  }
+  actualizarIndicadorSync('synced');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GUARDADO QUIRÚRGICO — recurrentes: estado (checklist/fotos) y comentarios
+// Marcar/desmarcar una casilla, adjuntar una foto, o comentar una tarea SOLO guarda esa fila
+// puntual (conjunto+mes+tarea+repetición, o conjunto+tarea para comentarios) — ninguna otra
+// casilla del mismo conjunto, ni de ningún otro conjunto, se toca. Los "slots vacíos" de una
+// tarea/conjunto recién creado YA NO se pre-insertan en Supabase — se crean solos, con su
+// primer valor real, la primera vez que alguien de verdad interactúa con esa casilla
+// (ensureEstadoSlot/ensureRecComs ya los arman en memoria con default local mientras tanto).
+// ═══════════════════════════════════════════════════════════════
+function filaEstadoSlot(conjunto, mes, tareaIdx, slotIdx, slot) {
+  return {
+    conjunto, mes, tarea_idx: tareaIdx, slot_idx: slotIdx,
+    done: !!slot.done, ts: slot.ts || null, ts_manual: slot.tsManual || null,
+    has_foto: !!slot.hasFoto, foto_count: slot.fotoCount || null, undone_at: isoODefecto(slot.undoneAt)
+  };
+}
+
+let _estadoSlotTimers = {};
+async function guardarEstadoSlotEnSupabase(conjunto, mes, tareaIdx, slotIdx) {
+  const slot = ESTADO[conjunto] && ESTADO[conjunto][mes] && ESTADO[conjunto][mes][tareaIdx] && ESTADO[conjunto][mes][tareaIdx][slotIdx];
+  if (!slot) return;
+  const { error } = await SB.from('recurrentes_estado')
+    .upsert(filaEstadoSlot(conjunto, mes, tareaIdx, slotIdx, slot), { onConflict: 'conjunto,mes,tarea_idx,slot_idx' });
+  if (error) {
+    console.error('Error guardando estado recurrente en Supabase:', error.message);
+    actualizarIndicadorSync('offline');
+    return;
+  }
+  actualizarIndicadorSync('synced');
+}
+
+function programarGuardadoEstadoSlot(conjunto, mes, tareaIdx, slotIdx) {
+  guardarLocal();
+  const clave = `${conjunto}|${mes}|${tareaIdx}|${slotIdx}`;
+  clearTimeout(_estadoSlotTimers[clave]);
+  _estadoSlotTimers[clave] = setTimeout(() => guardarEstadoSlotEnSupabase(conjunto, mes, tareaIdx, slotIdx), SAVE_DELAY);
+}
+
+let _recComsRecTimers = {};
+async function guardarComentariosRecurrenteEnSupabase(conjunto, tareaIdx) {
+  const coms = (REC_COMS[conjunto] && REC_COMS[conjunto][tareaIdx]) || [];
+  const { error } = await SB.from('recurrentes_comentarios')
+    .upsert({ conjunto, tarea_idx: tareaIdx, comentarios: coms }, { onConflict: 'conjunto,tarea_idx' });
+  if (error) {
+    console.error('Error guardando comentarios recurrentes en Supabase:', error.message);
+    actualizarIndicadorSync('offline');
+    return;
+  }
+  actualizarIndicadorSync('synced');
+}
+
+function programarGuardadoComentariosRecurrente(conjunto, tareaIdx) {
+  guardarLocal();
+  const clave = `${conjunto}|${tareaIdx}`;
+  clearTimeout(_recComsRecTimers[clave]);
+  _recComsRecTimers[clave] = setTimeout(() => guardarComentariosRecurrenteEnSupabase(conjunto, tareaIdx), SAVE_DELAY);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GUARDADO QUIRÚRGICO — evaluación manual (evaluacion_manual)
+// Guardar el puntaje de un ítem o la asistencia de UN conjunto/mes solo toca esa fila puntual
+// — ninguna evaluación de otro conjunto o de otro mes se reenvía.
+// ═══════════════════════════════════════════════════════════════
+let _evalManualTimers = {};
+async function guardarEvalManualEnSupabase(conjunto, mes) {
+  const ev = (EVAL_MANUAL[conjunto] && EVAL_MANUAL[conjunto][mes]) || { tareas: {}, cartera: '', asistencia: '' };
+  const { error } = await SB.from('evaluacion_manual')
+    .upsert({ conjunto, mes, tareas: ev.tareas || {}, cartera: ev.cartera || null, asistencia: ev.asistencia || null }, { onConflict: 'conjunto,mes' });
+  if (error) {
+    console.error('Error guardando evaluación manual en Supabase:', error.message);
+    actualizarIndicadorSync('offline');
+    return;
+  }
+  actualizarIndicadorSync('synced');
+}
+
+function programarGuardadoEvalManual(conjunto, mes) {
+  guardarLocal();
+  const clave = `${conjunto}|${mes}`;
+  clearTimeout(_evalManualTimers[clave]);
+  _evalManualTimers[clave] = setTimeout(() => guardarEvalManualEnSupabase(conjunto, mes), SAVE_DELAY);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GUARDADO QUIRÚRGICO — fechas límite (fechas_limite, fechas_limite_global)
+// ═══════════════════════════════════════════════════════════════
+let _fechaLimiteTimers = {};
+async function guardarFechaLimiteEnSupabase(conjunto, mes, tareaIdx) {
+  const fecha = FECHAS_LIMITE_REC[conjunto] && FECHAS_LIMITE_REC[conjunto][mes] && FECHAS_LIMITE_REC[conjunto][mes][tareaIdx];
+  const { error } = await SB.from('fechas_limite')
+    .upsert({ conjunto, mes, tarea_idx: tareaIdx, fecha: fecha || null }, { onConflict: 'conjunto,mes,tarea_idx' });
+  if (error) {
+    console.error('Error guardando fecha límite en Supabase:', error.message);
+    actualizarIndicadorSync('offline');
+    return;
+  }
+  actualizarIndicadorSync('synced');
+}
+
+function programarGuardadoFechaLimite(conjunto, mes, tareaIdx) {
+  guardarLocal();
+  const clave = `${conjunto}|${mes}|${tareaIdx}`;
+  clearTimeout(_fechaLimiteTimers[clave]);
+  _fechaLimiteTimers[clave] = setTimeout(() => guardarFechaLimiteEnSupabase(conjunto, mes, tareaIdx), SAVE_DELAY);
+}
+
+let _fechaGlobalTimers = {};
+async function guardarFechaLimiteGlobalEnSupabase(mes, tareaNombre) {
+  if (!esStaff()) return;
+  const fecha = FECHAS_LIMITE_REC_GLOBAL[mes] && FECHAS_LIMITE_REC_GLOBAL[mes][tareaNombre];
+  const { error } = await SB.from('fechas_limite_global')
+    .upsert({ mes, tarea_nombre: tareaNombre, fecha: fecha || null }, { onConflict: 'mes,tarea_nombre' });
+  if (error) {
+    console.error('Error guardando fecha límite global en Supabase:', error.message);
+    actualizarIndicadorSync('offline');
+    return;
+  }
+  actualizarIndicadorSync('synced');
+}
+
+function programarGuardadoFechaGlobal(mes, tareaNombre) {
+  guardarLocal();
+  const clave = `${mes}|${tareaNombre}`;
+  clearTimeout(_fechaGlobalTimers[clave]);
+  _fechaGlobalTimers[clave] = setTimeout(() => guardarFechaLimiteGlobalEnSupabase(mes, tareaNombre), SAVE_DELAY);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GUARDADO QUIRÚRGICO — tareas A&V (tareas_av)
+// id ya se genera en el cliente (AV-XXX) antes de guardar, igual que tareas eventuales — upsert
+// sirve para crear y editar por igual.
+// ═══════════════════════════════════════════════════════════════
+async function guardarTareaAVEnSupabase(id) {
+  const t = DATA.tareasAV.find(t => t.id === id);
+  if (!t) return;
+  const { error } = await SB.from('tareas_av').upsert({ id: t.id, nombre: t.n, estado: t.est, vence: t.vence });
+  if (error) {
+    console.error('Error guardando tarea A&V en Supabase:', error.message);
+    actualizarIndicadorSync('offline');
+    return;
+  }
+  actualizarIndicadorSync('synced');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GUARDADO QUIRÚRGICO — eventos de calendario (eventos_calendario)
+// id ya se genera en el cliente (EV-XXX) — upsert sirve para crear y editar por igual.
+// ═══════════════════════════════════════════════════════════════
+async function guardarEventoEnSupabase(id) {
+  const e = DATA.eventosCalendario.find(e => e.id === id);
+  if (!e) return;
+  const row = {
+    id: e.id, tipo: e.tipo, conjunto: e.conjunto, titulo: e.titulo, fecha: e.fecha, hora: e.hora,
+    descripcion: e.descripcion, participantes: e.participantes || [], creado_por: e.creadoPor
+  };
+  const { error } = await SB.from('eventos_calendario').upsert(row);
+  if (error) {
+    console.error('Error guardando evento de calendario en Supabase:', error.message);
+    actualizarIndicadorSync('offline');
+    return;
+  }
+  actualizarIndicadorSync('synced');
+}
+
+async function eliminarEventoEnSupabase(id) {
+  const { error } = await SB.from('eventos_calendario').delete().eq('id', id);
+  if (error) {
+    console.error('Error eliminando evento de calendario en Supabase:', error.message);
+    actualizarIndicadorSync('offline');
+    return;
+  }
+  actualizarIndicadorSync('synced');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RESTAURAR BACKUP — reemplaza el restaurarBackup() viejo que escribía a Firebase (nodo muerto,
+// nadie lo leía desde que los datos se migraron a Supabase — bug real, la restauración nunca
+// llegaba a ningún lado). Es la ÚNICA excepción intencional al guardado quirúrgico: restaurar
+// un backup es, por definición, reemplazar TODO — el usuario ya confirmó eso en el diálogo.
+// ESTADO (checklist de recurrentes) se mantiene, igual que siempre (regla 6.4.4) — no se toca
+// ni localmente ni en Supabase.
+// ═══════════════════════════════════════════════════════════════
+async function restaurarBackupEnSupabase(snap) {
+  const resultados = [];
+
+  if (esStaff()) {
+    const conjuntosRows = [...(snap.conjuntos?.def || []), ...(snap.conjuntos?.pro || [])].map(c => ({
+      nombre: c.n,
+      tipo: (snap.conjuntos.def || []).includes(c) ? 'Definitivos' : 'Provisional (A&V)',
+      delegado: c.del, color: c.c, eval: c.eval || {}, cartera: c.cartera || {}, deleted: !!c.deleted
+    }));
+    if (conjuntosRows.length) resultados.push(SB.from('conjuntos').upsert(conjuntosRows, { onConflict: 'nombre' }));
+
+    const catalogoRows = (snap.tareasRec || []).filter(t => t._supabaseId).map(t => ({
+      id: t._supabaseId, nombre: t.n, descripcion: t.desc, aplica: t.aplica, frecuencia: t.frec,
+      veces: t.veces, cuando: t.cuando, limite: t.limite, bimestral: !!t.bimestral, foto: !!t.foto,
+      fecha_variable: !!t.fechaVariable, fecha_individual: !!t.fechaIndividual,
+      auto_eval: !!t.autoEval, eval_pts: t.evalPts, deleted: !!t.deleted
+    }));
+    if (catalogoRows.length) resultados.push(SB.from('tareas_recurrentes_catalogo').upsert(catalogoRows, { onConflict: 'id' }));
+
+    const usuariosRows = (snap.usuarios || []).map((u, i) => {
+      const cedula = Object.keys(snap.cedulas || {}).find(c => snap.cedulas[c].idx === i);
+      return u._supabaseId && cedula
+        ? { id: u._supabaseId, nombre: u.n, cedula, rol: u.rol, cargo: u.cargo || null, equipo: u.equipo || null,
+            avatar: u.av || null, color: u.c || null, activo: snap.cedulas[cedula].activo !== false }
+        : null;
+    }).filter(Boolean);
+    if (usuariosRows.length) resultados.push(SB.from('usuarios').upsert(usuariosRows, { onConflict: 'id' }));
+  }
+
+  const tareasEveRows = (snap.tareasEve || []).map(t => ({
     id: t.id, conjunto: t.conj, nombre: t.n, obs: t.obs, tipo: t.tipo, encargado: t.enc,
     registrado_por: t.ra, aprobador: t.apr, prioridad: t.pri, estado: t.est,
     est_upd_at: isoODefecto(t.estUpdAt), registrada: t.reg, vence: t.vence,
@@ -221,112 +728,95 @@ async function guardarTodoEnSupabase() {
     finalizado_en: isoODefecto(t.finalizadoEn), aprobado_en: isoODefecto(t.aprobadoEn),
     comentarios: t.coms || []
   }));
-  if (tareasEveRows.length) tareas.push(SB.from('tareas_eventuales').upsert(tareasEveRows));
+  if (tareasEveRows.length) resultados.push(SB.from('tareas_eventuales').upsert(tareasEveRows));
 
-  const tareasArchivoRows = snap.tareasArchivo.map(t => ({
+  const tareasArchivoRows = (snap.tareasArchivo || []).map(t => ({
     id: t.id, conjunto: t.conj, nombre: t.n, obs: t.obs, tipo: t.tipo, estado: t.est,
     creado_en: isoODefecto(t.creadoEn), finalizado_en: isoODefecto(t.finalizadoEn),
     aprobado_en: isoODefecto(t.aprobadoEn), comentarios: t.coms || [], archivado_en: t.archivedAt
   }));
-  if (tareasArchivoRows.length) tareas.push(SB.from('tareas_archivo').upsert(tareasArchivoRows));
-
-  const estadoRows = [];
-  Object.entries(snap.estado).forEach(([conjunto, meses]) => {
-    Object.entries(meses).forEach(([mes, tareasObj]) => {
-      Object.entries(tareasObj).forEach(([tareaIdx, slots]) => {
-        Object.entries(slots).forEach(([slotIdx, slot]) => {
-          estadoRows.push({
-            conjunto, mes, tarea_idx: parseInt(tareaIdx, 10), slot_idx: parseInt(slotIdx, 10),
-            done: !!slot.done, ts: slot.ts || null, ts_manual: slot.tsManual || null,
-            has_foto: !!slot.hasFoto, foto_count: slot.fotoCount || null, undone_at: isoODefecto(slot.undoneAt)
-          });
-        });
-      });
-    });
-  });
-  if (estadoRows.length) tareas.push(SB.from('recurrentes_estado').upsert(estadoRows, { onConflict: 'conjunto,mes,tarea_idx,slot_idx' }));
+  if (tareasArchivoRows.length) resultados.push(SB.from('tareas_archivo').upsert(tareasArchivoRows));
 
   const comsRows = [];
-  Object.entries(snap.recComs).forEach(([conjunto, tareasObj]) => {
+  Object.entries(snap.recComs || {}).forEach(([conjunto, tareasObj]) => {
     Object.entries(tareasObj).forEach(([tareaIdx, coms]) => {
       if (coms && coms.length) comsRows.push({ conjunto, tarea_idx: parseInt(tareaIdx, 10), comentarios: coms });
     });
   });
-  if (comsRows.length) tareas.push(SB.from('recurrentes_comentarios').upsert(comsRows, { onConflict: 'conjunto,tarea_idx' }));
+  if (comsRows.length) resultados.push(SB.from('recurrentes_comentarios').upsert(comsRows, { onConflict: 'conjunto,tarea_idx' }));
 
   const evalRows = [];
-  Object.entries(snap.evalManual).forEach(([conjunto, meses]) => {
+  Object.entries(snap.evalManual || {}).forEach(([conjunto, meses]) => {
     Object.entries(meses).forEach(([mes, ev]) => {
       evalRows.push({ conjunto, mes, tareas: ev.tareas || {}, cartera: ev.cartera || null, asistencia: ev.asistencia || null });
     });
   });
-  if (evalRows.length) tareas.push(SB.from('evaluacion_manual').upsert(evalRows, { onConflict: 'conjunto,mes' }));
+  if (evalRows.length) resultados.push(SB.from('evaluacion_manual').upsert(evalRows, { onConflict: 'conjunto,mes' }));
 
   const fechasRows = [];
-  Object.entries(snap.fechasLimiteRec).forEach(([conjunto, meses]) => {
+  Object.entries(snap.fechasLimiteRec || {}).forEach(([conjunto, meses]) => {
     Object.entries(meses).forEach(([mes, tareasObj]) => {
       Object.entries(tareasObj).forEach(([tareaIdx, fecha]) => {
         if (fecha) fechasRows.push({ conjunto, mes, tarea_idx: parseInt(tareaIdx, 10), fecha });
       });
     });
   });
-  if (fechasRows.length) tareas.push(SB.from('fechas_limite').upsert(fechasRows, { onConflict: 'conjunto,mes,tarea_idx' }));
+  if (fechasRows.length) resultados.push(SB.from('fechas_limite').upsert(fechasRows, { onConflict: 'conjunto,mes,tarea_idx' }));
 
   const fechasGlobalRows = [];
-  Object.entries(snap.fechasLimiteRecGlobal).forEach(([mes, tareasObj]) => {
+  Object.entries(snap.fechasLimiteRecGlobal || {}).forEach(([mes, tareasObj]) => {
     Object.entries(tareasObj).forEach(([tareaNombre, fecha]) => {
       if (fecha) fechasGlobalRows.push({ mes, tarea_nombre: tareaNombre, fecha });
     });
   });
-  if (fechasGlobalRows.length) tareas.push(SB.from('fechas_limite_global').upsert(fechasGlobalRows, { onConflict: 'mes,tarea_nombre' }));
+  if (fechasGlobalRows.length) resultados.push(SB.from('fechas_limite_global').upsert(fechasGlobalRows, { onConflict: 'mes,tarea_nombre' }));
 
-  const avRows = snap.tareasAV.map(t => ({ id: t.id, nombre: t.n, estado: t.est, vence: t.vence }));
-  if (avRows.length) tareas.push(SB.from('tareas_av').upsert(avRows));
+  const avRows = (snap.tareasAV || []).map(t => ({ id: t.id, nombre: t.n, estado: t.est, vence: t.vence }));
+  if (avRows.length) resultados.push(SB.from('tareas_av').upsert(avRows));
 
-  const eventosRows = snap.eventosCalendario.map(e => ({
+  const eventosRows = (snap.eventosCalendario || []).map(e => ({
     id: e.id, tipo: e.tipo, conjunto: e.conjunto, titulo: e.titulo, fecha: e.fecha, hora: e.hora,
     descripcion: e.descripcion, participantes: e.participantes || [], creado_por: e.creadoPor
   }));
-  if (eventosRows.length) tareas.push(SB.from('eventos_calendario').upsert(eventosRows));
+  if (eventosRows.length) resultados.push(SB.from('eventos_calendario').upsert(eventosRows));
 
-  // Catálogo/conjuntos: cambian rara vez y solo Staff puede escribirlos (RLS) — se omiten para
-  // delegados, evita llamadas que sabemos de antemano que la base va a rechazar
-  if (esStaff()) {
-    const conjuntosRows = todosLosConjuntos().map(c => ({
-      nombre: c.n,
-      tipo: (DATA.conjuntos.def || []).includes(c) ? 'Definitivos' : 'Provisional (A&V)',
-      delegado: c.del, color: c.c, eval: c.eval || {}, cartera: c.cartera || {}, deleted: !!c.deleted
-    }));
-    if (conjuntosRows.length) tareas.push(SB.from('conjuntos').upsert(conjuntosRows, { onConflict: 'nombre' }));
-
-    // Solo se actualizan las tareas del catálogo que ya existen en Supabase (traen _supabaseId).
-    // Las creadas nuevas desde Admin en esta sesión aún no tienen ese id — quedan pendientes de
-    // un ajuste futuro para insertarlas correctamente con su id nuevo.
-    const catalogoRows = DATA.tareasRec.filter(t => t._supabaseId).map(t => ({
-      id: t._supabaseId, nombre: t.n, descripcion: t.desc, aplica: t.aplica, frecuencia: t.frec,
-      veces: t.veces, cuando: t.cuando, limite: t.limite, bimestral: !!t.bimestral, foto: !!t.foto,
-      fecha_variable: !!t.fechaVariable, fecha_individual: !!t.fechaIndividual,
-      auto_eval: !!t.autoEval, eval_pts: t.evalPts, deleted: !!t.deleted
-    }));
-    if (catalogoRows.length) tareas.push(SB.from('tareas_recurrentes_catalogo').upsert(catalogoRows, { onConflict: 'id' }));
-  }
-
-  const resultados = await Promise.all(tareas);
-  const errores = resultados.filter(r => r && r.error);
+  const respuestas = await Promise.all(resultados);
+  const errores = respuestas.filter(r => r && r.error);
   if (errores.length) {
-    console.error('Errores guardando en Supabase:', errores.map(e => e.error.message));
-    if (typeof actualizarIndicadorSync === 'function') actualizarIndicadorSync('offline');
+    console.error('Errores restaurando backup en Supabase:', errores.map(e => e.error.message));
+    actualizarIndicadorSync('offline');
     return { ok: false, errores };
   }
-  if (typeof actualizarIndicadorSync === 'function') actualizarIndicadorSync('synced');
+  actualizarIndicadorSync('synced');
   return { ok: true };
 }
 
-// Reemplaza el autoguardado de Firebase: guarda local al instante (para que no se pierda nada
-// si se cierra el navegador), y sube a Supabase con el mismo debounce de siempre.
-let _supabaseSaveTimer = null;
-function programarAutoSave() {
+// Botón "↑ Sync" del header — con guardado quirúrgico ya no hace falta "empujar cambios
+// pendientes" (cada acción se guarda sola al instante), así que ahora simplemente vuelve a
+// traer todo desde Supabase (útil si alguien más cambió algo y quieres verlo ya, sin esperar).
+async function forceSyncMerge() {
+  actualizarIndicadorSync('syncing');
+  const resultado = await cargarTodoDesdeSupabase();
+  if (resultado.ok) {
+    actualizarIndicadorSync('synced');
+    if (typeof onDataChanged === 'function') onDataChanged();
+    if (typeof toast === 'function') toast('☁️ Sincronizado');
+  } else {
+    actualizarIndicadorSync('offline');
+    if (typeof toast === 'function') toast('⚠️ No se pudo sincronizar — revisa tu conexión');
+  }
+}
+
+async function restaurarBackup(snap) {
+  (snap.tareasEve || []).forEach(t => { t.estUpdAt = Date.now(); });
+  aplicarSnapshotDirecto(snap); // ESTADO se mantiene, no se restaura desde backup (regla 6.4.4)
   guardarLocal();
-  clearTimeout(_supabaseSaveTimer);
-  _supabaseSaveTimer = setTimeout(guardarTodoEnSupabase, SAVE_DELAY);
+  const resultado = await restaurarBackupEnSupabase(snap);
+  if (resultado.ok) {
+    if (typeof toast === 'function') toast('✓ Restaurado');
+    if (typeof onDataChanged === 'function') onDataChanged();
+  } else if (typeof toast === 'function') {
+    toast('⚠️ Error restaurando en Supabase — revisa la consola');
+  }
+  return resultado;
 }
