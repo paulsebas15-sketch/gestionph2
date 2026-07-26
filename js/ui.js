@@ -170,11 +170,10 @@ function renderSyncIndicator(estado) {
   const hora = tsCol().split(' ')[1];
   const estados = {
     synced: `☁️ Sincronizado ${hora}`,
-    local: `💾 Local ${hora} ⏳`,
     syncing: `↻ Sincronizando…`,
     offline: `📵 Sin conexión — guardando local`
   };
-  el.textContent = estados[estado] || estados.local;
+  el.textContent = estados[estado] || estados.offline;
 }
 
 // ─── SUGERIR FECHA DE VENCIMIENTO SEGÚN PRIORIDAD ─────────────

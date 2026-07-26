@@ -76,10 +76,6 @@ function renderAnalitica() {
         <tbody>${renderFilasEvaluacion(evaluaciones)}</tbody>
       </table>
     </div>
-    <div class="card">
-      <div class="card-title">💡 Fortalezas y oportunidades</div>
-      ${renderFortalezasOportunidades(ranking, cumplimientos, evaluaciones)}
-    </div>
   `;
 }
 
@@ -131,44 +127,6 @@ function renderFilasEvaluacion(evaluaciones) {
       <td>${e.nota}%</td>
       <td><span class="${e.clase}">${e.label}</span></td>
     </tr>`).join('');
-}
-
-// Combina las 3 métricas (cumpl. recurrentes, % eventuales cerradas, nota eval) en un promedio
-// simple por conjunto para resaltar los 2 mejores y los 2 que más necesitan apoyo
-function renderFortalezasOportunidades(ranking, cumplimientos, evaluaciones) {
-  if (ranking.length < 2) return '<div style="font-size:11px;color:var(--txs)">Se necesitan al menos 2 conjuntos visibles para comparar.</div>';
-
-  const cumplPorConjunto = Object.fromEntries(cumplimientos.map(c => [c.conjunto, c.pct]));
-  const evalPorConjunto = Object.fromEntries(evaluaciones.map(e => [e.conjunto, e.nota]));
-
-  const combinado = ranking.map(r => {
-    const cumplRec = cumplPorConjunto[r.conjunto] ?? 0;
-    const nota = evalPorConjunto[r.conjunto] ?? 0;
-    const promedio = Math.round((r.finalizadasPct + cumplRec + nota) / 3);
-    return { conjunto: r.conjunto, promedio, finalizadasPct: r.finalizadasPct, cumplRec, nota };
-  }).sort((a, b) => b.promedio - a.promedio);
-
-  const mejores = combinado.slice(0, 2);
-  const peores = combinado.slice(-2).reverse();
-
-  const puntoMasDebil = c => {
-    const partes = [
-      { label: 'cumplimiento de recurrentes', val: c.cumplRec },
-      { label: '% de eventuales cerradas', val: c.finalizadasPct },
-      { label: 'nota de evaluación', val: c.nota }
-    ];
-    return partes.sort((a, b) => a.val - b.val)[0];
-  };
-
-  return `
-    <div style="font-size:11px;line-height:1.7">
-      ${mejores.map(c => `<div>🏆 <strong>${c.conjunto}</strong> — mejor desempeño combinado (${c.promedio}% promedio).</div>`).join('')}
-      ${peores.map(c => {
-        const debil = puntoMasDebil(c);
-        return `<div>⚠️ <strong>${c.conjunto}</strong> — necesita apoyo, punto más débil: ${debil.label} (${debil.val}%).</div>`;
-      }).join('')}
-    </div>
-  `;
 }
 
 function renderBarrasCumplimiento(cumplimientos) {
