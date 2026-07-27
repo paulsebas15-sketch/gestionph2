@@ -61,7 +61,11 @@ function conjuntoActivoParaVista() {
     return primero ? primero.n : null;
   }
   const usuario = usuarioActual();
-  return usuario && usuario.conjuntos && usuario.conjuntos[0];
+  if (!usuario || !usuario.conjuntos || !usuario.conjuntos.length) return null;
+  if (CONJUNTO_SELECCIONADO && CONJUNTO_SELECCIONADO !== 'Todos' && usuario.conjuntos.includes(CONJUNTO_SELECCIONADO)) {
+    return CONJUNTO_SELECCIONADO;
+  }
+  return usuario.conjuntos[0];
 }
 
 // Tareas cuya fecha se calcula sola desde el evento "Reunión de consejo" de Calendario — se
