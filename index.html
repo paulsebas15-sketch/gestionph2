@@ -24,7 +24,7 @@
       <h3>Iniciar sesión</h3>
       <div class="form-group">
         <label class="form-label">Número de cédula</label>
-        <input class="form-input" id="input-cedula" type="text" placeholder="Ej. 1234567890">
+        <input class="form-input" id="input-cedula" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Ej. 1234567890">
       </div>
       <button class="btn btn-v" style="width:100%" onclick="intentarLogin()">Ingresar →</button>
       <div class="login-error oculto" id="login-error"></div>
