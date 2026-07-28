@@ -95,15 +95,13 @@
             <select class="form-input" id="nueva-eve-prioridad"></select>
           </div>
         </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label class="form-label">Encargado</label>
-            <select class="form-input" id="nueva-eve-encargado"></select>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Fecha de vencimiento</label>
-            <input class="form-input" type="date" id="nueva-eve-fecha">
-          </div>
+        <div class="form-group">
+          <label class="form-label">Encargado</label>
+          <div id="encargado-por-conjunto" style="display:flex;flex-direction:column;gap:6px"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Fecha de vencimiento</label>
+          <input class="form-input" type="date" id="nueva-eve-fecha">
         </div>
       </form>
       <div style="display:flex;gap:8px;margin-top:4px">
@@ -138,7 +136,56 @@
       </div>
       <div style="font-size:10px;font-weight:600;margin-bottom:6px">Cambiar estado:</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap" id="detalle-eve-acciones"></div>
-      <button class="btn btn-g" style="width:100%;margin-top:12px" onclick="closeOv('modal-detalle-eve')">Cerrar</button>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn btn-g oculto" style="flex:1" id="detalle-eve-btn-editar" onclick="abrirEditarEventual()">✏️ Editar</button>
+        <button class="btn btn-g" style="flex:1" onclick="closeOv('modal-detalle-eve')">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ MODAL: EDITAR TAREA EVENTUAL ═══ -->
+  <div class="modal-overlay oculto" id="modal-editar-eve">
+    <div class="modal">
+      <div class="modal-title">✏️ Editar tarea eventual</div>
+      <input type="hidden" id="editar-eve-id">
+      <div class="form-group">
+        <label class="form-label">Nombre de la tarea *</label>
+        <input class="form-input" id="editar-eve-nombre">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Descripción / Observación *</label>
+        <textarea class="form-input" id="editar-eve-desc"></textarea>
+      </div>
+      <div id="editar-eve-avanzado">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Tipo</label>
+            <select class="form-input" id="editar-eve-tipo"></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Prioridad</label>
+            <select class="form-input" id="editar-eve-prioridad"></select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Conjunto</label>
+            <select class="form-input" id="editar-eve-conjunto"></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Encargado</label>
+            <select class="form-input" id="editar-eve-encargado"></select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Fecha de vencimiento</label>
+          <input class="form-input" type="date" id="editar-eve-fecha">
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:4px">
+        <button class="btn btn-g" style="flex:1" onclick="closeOv('modal-editar-eve')">Cancelar</button>
+        <button class="btn btn-v" style="flex:2" onclick="guardarEdicionEventual()">✓ Guardar cambios</button>
+      </div>
     </div>
   </div>
 
@@ -161,6 +208,43 @@
       <div class="modal-title" id="ver-foto-titulo"></div>
       <div id="ver-foto-lista"></div>
       <button class="btn btn-g" style="width:100%;margin-top:12px" onclick="closeOv('modal-ver-foto')">Cerrar</button>
+    </div>
+  </div>
+
+  <!-- ═══ MODAL: SOLICITAR SÁBADO LIBRE ═══ -->
+  <div class="modal-overlay oculto" id="modal-solicitar-sabado">
+    <div class="modal">
+      <div class="modal-title">🌞 Solicitar sábado libre</div>
+      <div class="form-group">
+        <label class="form-label">Sábado</label>
+        <input class="form-input" type="date" id="sabado-fecha-input">
+      </div>
+      <div id="sabado-saldo-info" style="font-size:9px;color:var(--txs);margin-bottom:8px"></div>
+      <div style="display:flex;gap:8px;margin-top:4px">
+        <button class="btn btn-g" style="flex:1" onclick="closeOv('modal-solicitar-sabado')">Cancelar</button>
+        <button class="btn btn-v" style="flex:2" onclick="confirmarSolicitudSabado()">✓ Solicitar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ MODAL: SOLICITAR VACACIONES ═══ -->
+  <div class="modal-overlay oculto" id="modal-solicitar-vacacion">
+    <div class="modal">
+      <div class="modal-title">🏖️ Solicitar vacaciones</div>
+      <div id="vaca-modal-contenido"></div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn btn-g" style="flex:1" onclick="closeOv('modal-solicitar-vacacion')">Cancelar</button>
+        <button class="btn btn-v" style="flex:2" onclick="confirmarSolicitudVacacion()">✓ Solicitar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ MODAL: DETALLE DE DÍA (horarios + ausencias + eventos) ═══ -->
+  <div class="modal-overlay oculto" id="modal-dia-detalle">
+    <div class="modal">
+      <div class="modal-title" id="dia-detalle-titulo"></div>
+      <div id="dia-detalle-contenido"></div>
+      <button class="btn btn-g" style="width:100%;margin-top:12px" onclick="closeOv('modal-dia-detalle')">Cerrar</button>
     </div>
   </div>
 
@@ -250,6 +334,11 @@
           <select class="form-input" id="conj-delegado"></select>
         </div>
       </div>
+      <div class="form-group">
+        <label class="form-label">Color en el calendario</label>
+        <input type="hidden" id="conj-color" value="">
+        <div id="conj-color-swatches" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+      </div>
       <div style="display:flex;gap:8px;margin-top:4px">
         <button class="btn btn-r btn-sm oculto" id="conj-btn-eliminar" onclick="eliminarConjunto()">🗑 Eliminar</button>
         <button class="btn btn-g" style="flex:1" onclick="closeOv('modal-conjunto')">Cancelar</button>
@@ -294,12 +383,23 @@
           </select>
         </div>
       </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Estado</label>
+          <select class="form-input" id="usr-activo">
+            <option value="true">✅ Activo</option>
+            <option value="false">⛔ Inactivo</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Fecha de ingreso</label>
+          <input class="form-input" type="date" id="usr-fecha-ingreso">
+        </div>
+      </div>
       <div class="form-group">
-        <label class="form-label">Estado</label>
-        <select class="form-input" id="usr-activo">
-          <option value="true">✅ Activo</option>
-          <option value="false">⛔ Inactivo</option>
-        </select>
+        <label style="font-size:10px;display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="usr-medio-tiempo"> Trabaja medio tiempo (sin sábados libres ni compensatorio de reunión)
+        </label>
       </div>
       <div class="form-group" id="usr-conjuntos-wrap">
         <label class="form-label">Conjuntos asignados</label>
@@ -367,6 +467,7 @@
 <script src="js/auth.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/calendario.js"></script>
+<script src="js/horarios.js"></script>
 <script src="js/recurrentes.js"></script>
 <script src="js/dashboard.js"></script>
 <script src="js/eventuales.js"></script>
