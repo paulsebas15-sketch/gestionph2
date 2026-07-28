@@ -228,6 +228,54 @@ textarea.form-input{resize:vertical;min-height:60px}
   .cal-dow{font-size:8px}
 }
 
+/* HORARIOS — vista semanal (viñetas por delegado x día) */
+.horw-toggle{display:inline-flex;background:var(--b);border-radius:8px;padding:3px;gap:3px}
+.horw-toggle-btn{border:none;background:none;padding:6px 14px;font-size:11px;border-radius:6px;cursor:pointer;color:var(--txs);font-weight:600}
+.horw-toggle-btn.activo{background:white;color:var(--v2);box-shadow:0 1px 2px rgba(0,0,0,.1)}
+:root[data-theme="dark"] .horw-toggle-btn.activo{background:#2c2820;color:var(--vm)}
+.horw-nav{display:flex;align-items:center;gap:10px}
+.horw-nav-btn{background:white;border:1px solid var(--brd);border-radius:6px;width:26px;height:26px;cursor:pointer;font-size:12px}
+.horw-grid{display:grid;grid-template-columns:120px repeat(7,1fr);gap:4px;overflow-x:auto}
+.horw-head{font-size:9px;font-weight:700;color:var(--txs);text-align:center;padding:6px 2px;text-transform:uppercase}
+.horw-head-hoy{color:var(--vm)}
+.horw-delegado{font-size:10px;font-weight:700;color:var(--tx);display:flex;align-items:center;padding:6px 4px}
+.horw-cell{background:white;border:1px solid var(--brd);border-radius:8px;min-height:56px;padding:4px;cursor:pointer;display:flex;flex-direction:column;gap:2px;justify-content:center}
+.horw-cell:hover{border-color:var(--vm)}
+.horw-cell-hoy{border-color:var(--vm);border-width:2px}
+.horw-chip{font-size:8.5px;border-radius:5px;padding:3px 5px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.horw-chip-trabajo{background:#e6f4ea;color:#1e6b3c}
+:root[data-theme="dark"] .horw-chip-trabajo{background:#173321;color:#7fd39a}
+.horw-chip-sabado{background:#fdf1d9;color:#8a5a00}
+:root[data-theme="dark"] .horw-chip-sabado{background:#3a2c0f;color:#e8c069}
+.horw-chip-compensatorio{background:#e3f0fb;color:#1a5a8a}
+:root[data-theme="dark"] .horw-chip-compensatorio{background:#122f42;color:#7fbde8}
+.horw-chip-festivo{background:#ece0f5;color:#6a3d9a;font-weight:600}
+:root[data-theme="dark"] .horw-chip-festivo{background:#2e2140;color:#c9a6e8}
+.horw-chip-vacaciones{background:#d9f2ee;color:#0f766e}
+:root[data-theme="dark"] .horw-chip-vacaciones{background:#0f2e2a;color:#6fd9c9}
+/* Franja continua de vacaciones en la grilla mensual: sin redondeo en los días de en medio,
+   y se estira hacia el padding del día (que ya no tiene texto) para minimizar el corte visual
+   entre celdas contiguas de la misma semana */
+.franja-vacaciones{border-radius:4px;min-height:14px}
+.franja-vacaciones:not(.franja-inicio){border-top-left-radius:0;border-bottom-left-radius:0;margin-left:-5px}
+.franja-vacaciones:not(.franja-fin){border-top-right-radius:0;border-bottom-right-radius:0;margin-right:-5px}
+.horw-cell-vacia{color:var(--txs);font-size:9px;text-align:center}
+@media (max-width:720px){
+  .horw-grid{grid-template-columns:80px repeat(7,minmax(70px,1fr))}
+  .horw-delegado{font-size:9px}
+}
+
+/* VACACIONES — calendario de rango ("buscador de vuelos") */
+.vaca-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+.vaca-dow{font-size:9px;font-weight:700;color:var(--txs);text-align:center;padding:4px 0;text-transform:uppercase}
+.vaca-day{background:white;border:1px solid var(--brd);border-radius:6px;text-align:center;font-size:11px;padding:8px 0;cursor:pointer}
+.vaca-day:hover{border-color:var(--vm)}
+.vaca-day-vacio{background:none;border:none;cursor:default}
+.vaca-day-deshabilitado{color:var(--txs);opacity:.35;cursor:not-allowed}
+.vaca-day-extremo{background:var(--v);color:white;border-color:var(--v);font-weight:700}
+.vaca-day-rango{background:#d9ecdf;border-color:#d9ecdf;border-radius:0}
+:root[data-theme="dark"] .vaca-day-rango{background:#1c3324}
+
 /* CHIPS DE FILTRO (multi-selección) */
 .chip-row{display:flex;flex-wrap:wrap;gap:6px}
 .chip{display:inline-flex;align-items:center;gap:5px;background:white;border:1px solid var(--brd);border-radius:20px;padding:5px 10px;font-size:10px;color:var(--tx);cursor:pointer}
