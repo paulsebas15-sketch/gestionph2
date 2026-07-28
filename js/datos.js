@@ -13,7 +13,12 @@ const DATA = {
   deletedEveIds: [],
   tareasArchivo: [],
   tareasAV: [],
-  eventosCalendario: []
+  eventosCalendario: [],
+  horariosDelegados: [],
+  sabadosLibres: [],
+  festivos: [],
+  vacaciones: [],
+  compensatorioElecciones: []
 };
 
 let ESTADO = {};       // ESTADO[conjunto][mes][tareaIdx][slotIdx] = { done, ts, tsManual, foto, undoneAt }
@@ -68,6 +73,86 @@ function conjuntosVisibles(usuario) {
 
 function usuarioPorNombre(nombre) {
   return DATA.usuarios.find(u => u.n === nombre);
+}
+
+function esMedioTiempo(nombreDelegado) {
+  const u = usuarioPorNombre(nombreDelegado);
+  return !!(u && u.medioTiempo);
+}
+
+// Años completos cumplidos desde la fecha de ingreso hasta hoy — cada uno otorga 15 días
+// hábiles de vacaciones de una sola vez (regla elegida: "bloques al cumplir año", no proporcional)
+function aniosCumplidos(fechaIngresoIso, hasta = new Date()) {
+  if (!fechaIngresoIso) return 0;
+  const ingreso = fechaIsoADate(fechaIngresoIso);
+  if (!ingreso) return 0;
+  let anios = hasta.getFullYear() - ingreso.getFullYear();
+  const aniversarioEsteAnio = new Date(hasta.getFullYear(), ingreso.getMonth(), ingreso.getDate());
+  if (hasta < aniversarioEsteAnio) anios--;
+  return Math.max(0, anios);
+}
+
+// Días hábiles (lunes-viernes) dentro de un rango de fechas, ambos extremos incluidos
+function diasHabilesEntre(fechaInicioIso, fechaFinIso) {
+  const inicio = fechaIsoADate(fechaInicioIso);
+  const fin = fechaIsoADate(fechaFinIso);
+  if (!inicio || !fin || fin < inicio) return 0;
+  let dias = 0;
+  const d = new Date(inicio);
+  while (d <= fin) {
+    if (!esFinDeSemana(d)) dias++;
+    d.setDate(d.getDate() + 1);
+  }
+  return dias;
+}
+
+// Saldo de vacaciones de un delegado: 15 días por cada año cumplido desde su ingreso, menos los
+// días hábiles ya aprobados (sin tope de acumulación, por decisión del usuario)
+function saldoVacaciones(nombreDelegado) {
+  const u = usuarioPorNombre(nombreDelegado);
+  const ganados = 15 * aniosCumplidos(u && u.fechaIngreso);
+  const tomados = DATA.vacaciones
+    .filter(v => v.delegado === nombreDelegado && v.estado === 'aprobado')
+    .reduce((sum, v) => sum + (v.diasHabiles || 0), 0);
+  return { ganados, tomados, disponible: ganados - tomados };
+}
+
+// Horarios (turnos semanales) de un delegado, sin contar "Oficina A&V" — usado para ubicarlo
+// en un conjunto puntual un día/hora dado
+function horariosDeDelegado(nombreDelegado) {
+  return DATA.horariosDelegados.filter(h => !h.deleted && h.delegado === nombreDelegado);
+}
+
+// Un festivo colombiano cargado en Admin para ESE año — busca por fecha exacta "YYYY-MM-DD"
+function festivoDeFecha(iso) {
+  if (!iso) return null;
+  return DATA.festivos.find(f => f.fecha === iso) || null;
+}
+
+function esFestivo(iso) {
+  return !!festivoDeFecha(iso);
+}
+
+// Todos los turnos (conjunto u oficina) de un delegado que aplican un día de semana dado.
+// Regla dura del negocio: domingo SIEMPRE vacío, sábado en la tarde SIEMPRE vacío, y cualquier
+// festivo colombiano cargado en Admin también vacío para TODOS — sin importar lo que diga
+// "dias_atencion" cargado en Admin (por error o dato viejo), nunca se muestra ni se cuenta un
+// turno ahí. El parámetro iso es opcional (solo hace falta para chequear festivos).
+function turnosDelDelegadoEnDia(nombreDelegado, nombreDia, iso) {
+  if (nombreDia === 'domingo') return [];
+  if (iso && esFestivo(iso)) return [];
+  let turnos = horariosDeDelegado(nombreDelegado).filter(h => diasAtencionIncluye(h.dias_atencion, nombreDia));
+  if (nombreDia === 'sabado') turnos = turnos.filter(h => horaSalidaPermiteSabado(h.hora_salida));
+  return turnos;
+}
+
+// Sábados libres de un delegado, opcionalmente filtrados por mes ("Julio") y/o estado
+function sabadosDeDelegado(nombreDelegado, mes, estado) {
+  return DATA.sabadosLibres.filter(s =>
+    s.delegado === nombreDelegado &&
+    (!mes || mesDeFechaIso(s.fecha) === mes) &&
+    (!estado || s.estado === estado)
+  );
 }
 
 function tareaRecActiva(tarea, mes) {
@@ -171,7 +256,12 @@ function buildSnapshot() {
     evalManual: EVAL_MANUAL,
     fechasLimiteRec: FECHAS_LIMITE_REC,
     fechasLimiteRecGlobal: FECHAS_LIMITE_REC_GLOBAL,
-    eventosCalendario: DATA.eventosCalendario
+    eventosCalendario: DATA.eventosCalendario,
+    horariosDelegados: DATA.horariosDelegados,
+    sabadosLibres: DATA.sabadosLibres,
+    festivos: DATA.festivos,
+    vacaciones: DATA.vacaciones,
+    compensatorioElecciones: DATA.compensatorioElecciones
   };
 }
 
@@ -187,6 +277,11 @@ function aplicarSnapshotDirecto(snap) {
   DATA.tareasArchivo = snap.tareasArchivo || [];
   DATA.tareasAV = snap.tareasAV || [];
   DATA.eventosCalendario = snap.eventosCalendario || [];
+  DATA.horariosDelegados = snap.horariosDelegados || [];
+  DATA.sabadosLibres = snap.sabadosLibres || [];
+  DATA.festivos = snap.festivos || [];
+  DATA.vacaciones = snap.vacaciones || [];
+  DATA.compensatorioElecciones = snap.compensatorioElecciones || [];
   REC_COMS = snap.recComs || {};
   EVAL_MANUAL = snap.evalManual || {};
   FECHAS_LIMITE_REC = snap.fechasLimiteRec || {};

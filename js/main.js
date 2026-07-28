@@ -144,15 +144,17 @@ function poblarSelectConjuntos() {
   const sel = document.getElementById('sel-conjunto');
   const conjGuardado = localStorage.getItem('gph_conjSel');
   const disponibles = conjuntosVisibles(usuarioActual());
-  CONJUNTO_SELECCIONADO = conjGuardado && (disponibles.includes(conjGuardado) || conjGuardado === 'Todos') ? conjGuardado : (esStaff() ? 'Todos' : disponibles[0]);
-  const opciones = esStaff() ? ['Todos', ...disponibles] : disponibles;
+  // Igual que Staff: un delegado con 2+ conjuntos también puede elegir "Todos" en el header
+  // (antes solo Staff lo tenía) — Calendario ya sabe mostrar solo lo suyo en ese caso.
+  const puedeVerTodos = esStaff() || disponibles.length > 1;
+  CONJUNTO_SELECCIONADO = conjGuardado && (disponibles.includes(conjGuardado) || (conjGuardado === 'Todos' && puedeVerTodos)) ? conjGuardado : (esStaff() ? 'Todos' : disponibles[0]);
+  const opciones = puedeVerTodos ? ['Todos', ...disponibles] : disponibles;
   sel.innerHTML = opciones.map(n => `<option ${n === CONJUNTO_SELECCIONADO ? 'selected' : ''}>${n}</option>`).join('');
 }
 
 function poblarSelectsFormularioEventual() {
   document.getElementById('nueva-eve-tipo').innerHTML = TIPOS_EVENTUAL.map(t => `<option>${t}</option>`).join('');
   document.getElementById('nueva-eve-prioridad').innerHTML = PRIORIDADES.map(p => `<option ${p === 'Media' ? 'selected' : ''}>${p}</option>`).join('');
-  document.getElementById('nueva-eve-encargado').innerHTML = DATA.usuarios.map(u => `<option>${u.n}</option>`).join('');
 }
 
 // Repuebla los selects del header y del formulario cuando cambian los conjuntos/usuarios

@@ -64,41 +64,6 @@ async function iniciarSesionSupabase(cedula) {
   return { ok: true, session: retryData.session, nuevaCuenta: true };
 }
 
-// ─── PROVISIÓN ÚNICA: crear las cuentas de Auth para los 11 usuarios ya migrados ──
-// Se ejecuta UNA sola vez desde Admin. Después de correrla, hay que vincular auth_id en
-// Supabase (ver la consulta SQL que se genera al final) para que las reglas de seguridad
-// sepan qué conjuntos administra cada cuenta.
-async function provisionarUsuariosSupabase() {
-  const { data: usuarios, error } = await SB.from('usuarios').select('cedula, nombre');
-  if (error) { toast('Error leyendo usuarios: ' + error.message); return; }
-
-  let creadas = 0;
-  let yaExistian = 0;
-  let fallidas = [];
-
-  for (const u of usuarios) {
-    const email = emailDeCedula(u.cedula);
-    const password = claveDeCedula(u.cedula);
-    const { error: signUpError } = await SB.auth.signUp({ email, password });
-    if (!signUpError) {
-      creadas++;
-    } else if (signUpError.message && signUpError.message.toLowerCase().includes('already registered')) {
-      yaExistian++;
-    } else {
-      fallidas.push(`${u.nombre} (${u.cedula}): ${signUpError.message}`);
-    }
-    await SB.auth.signOut(); // signUp deja sesión iniciada como ese usuario — cerrar antes del siguiente
-  }
-
-  const sqlVinculo = `update usuarios u set auth_id = a.id from auth.users a where a.email = u.cedula || '@${AUTH_EMAIL_DOMINIO}' and u.auth_id is null;`;
-
-  alert(
-    `Provisión terminada.\nCreadas: ${creadas}\nYa existían: ${yaExistian}\nFallidas: ${fallidas.length}${fallidas.length ? '\n\n' + fallidas.join('\n') : ''}\n\n` +
-    `AHORA corre esto UNA vez en el SQL Editor de Supabase para vincular las cuentas:\n\n${sqlVinculo}`
-  );
-  console.log('SQL para vincular auth_id:', sqlVinculo);
-}
-
 // ═══════════════════════════════════════════════════════════════
 // CARGA: trae todo lo que la sesión actual tiene permitido ver (RLS ya filtra por conjunto)
 // y arma exactamente el mismo "snapshot" que antes armaba Firebase — así el resto de la app
@@ -121,7 +86,7 @@ async function cargarTodoDesdeSupabase() {
   const [
     conjuntosRes, usuariosRes, delegadoConjRes, catalogoRes,
     eventualesRes, archivoRes, estadoRes, comsRes, evalRes,
-    fechasRes, fechasGlobalRes, avRes, eventosRes
+    fechasRes, fechasGlobalRes, avRes, eventosRes, horariosRes, sabadosRes, festivosRes, vacacionesRes, compElecRes
   ] = await Promise.all([
     SB.from('conjuntos').select('*'),
     SB.from('usuarios').select('*'),
@@ -135,8 +100,23 @@ async function cargarTodoDesdeSupabase() {
     SB.from('fechas_limite').select('*'),
     SB.from('fechas_limite_global').select('*'),
     SB.from('tareas_av').select('*'),
-    SB.from('eventos_calendario').select('*')
+    SB.from('eventos_calendario').select('*'),
+    SB.from('horarios_delegados').select('*'),
+    SB.from('sabados_libres').select('*'),
+    SB.from('festivos').select('*'),
+    SB.from('vacaciones').select('*'),
+    SB.from('compensatorio_elecciones').select('*')
   ]);
+
+  // horariosRes/sabadosRes/festivosRes/vacacionesRes/compElecRes se dejan AFUERA de esta
+  // validación a propósito: si esas tablas todavía no existen en Supabase (falta correr el .sql
+  // correspondiente), no debe tumbar la carga de TODO lo demás — la app sigue funcionando
+  // igual, solo sin esa función.
+  if (compElecRes.error) console.error('No se pudieron cargar elecciones de jornada libre (¿falta correr supabase_compensatorio_eleccion.sql?):', compElecRes.error.message);
+  if (horariosRes.error) console.error('No se pudieron cargar horarios de delegados (¿falta correr supabase_horarios_ausencias.sql?):', horariosRes.error.message);
+  if (sabadosRes.error) console.error('No se pudieron cargar sábados libres (¿falta correr supabase_horarios_ausencias.sql?):', sabadosRes.error.message);
+  if (festivosRes.error) console.error('No se pudieron cargar festivos (¿falta correr supabase_festivos.sql?):', festivosRes.error.message);
+  if (vacacionesRes.error) console.error('No se pudieron cargar vacaciones (¿falta correr supabase_vacaciones.sql?):', vacacionesRes.error.message);
 
   const primerError = [conjuntosRes, usuariosRes, delegadoConjRes, catalogoRes, eventualesRes,
     archivoRes, estadoRes, comsRes, evalRes, fechasRes, fechasGlobalRes, avRes, eventosRes]
@@ -161,7 +141,8 @@ async function cargarTodoDesdeSupabase() {
   });
   const usuarios = (usuariosRes.data || []).map(u => ({
     n: u.nombre, rol: u.rol, cargo: u.cargo, equipo: u.equipo, av: u.avatar, c: u.color,
-    conjuntos: conjPorUsuario[u.id] || [], activo: u.activo, _supabaseId: u.id
+    conjuntos: conjPorUsuario[u.id] || [], activo: u.activo,
+    fechaIngreso: u.fecha_ingreso || null, medioTiempo: !!u.medio_tiempo, _supabaseId: u.id
   }));
   const cedulas = {};
   const cedActivos = {};
@@ -236,10 +217,36 @@ async function cargarTodoDesdeSupabase() {
     descripcion: e.descripcion, participantes: e.participantes || [], creadoPor: e.creado_por
   }));
 
+  const horariosDelegados = (horariosRes.data || []).map(h => ({
+    conjunto: h.conjunto, delegado: h.delegado, turno: h.turno,
+    hora_entrada: h.hora_entrada, hora_salida: h.hora_salida, dias_atencion: h.dias_atencion,
+    deleted: h.deleted, _supabaseId: h.id
+  }));
+
+  const sabadosLibres = (sabadosRes.data || []).map(s => ({
+    delegado: s.delegado, fecha: s.fecha, estado: s.estado,
+    solicitadoEn: s.solicitado_en, resueltoPor: s.resuelto_por, _supabaseId: s.id
+  }));
+
+  const festivos = (festivosRes.data || []).map(f => ({
+    anio: f.anio, nombre: f.nombre, fecha: f.fecha, _supabaseId: f.id
+  }));
+
+  const vacaciones = (vacacionesRes.data || []).map(v => ({
+    delegado: v.delegado, fechaInicio: v.fecha_inicio, fechaFin: v.fecha_fin,
+    diasHabiles: v.dias_habiles, estado: v.estado,
+    solicitadoEn: v.solicitado_en, resueltoPor: v.resuelto_por, _supabaseId: v.id
+  }));
+
+  const compensatorioElecciones = (compElecRes.data || []).map(c => ({
+    eventoId: c.evento_id, delegado: c.delegado, eleccion: c.eleccion, _supabaseId: c.id
+  }));
+
   const snap = {
     conjuntos, usuarios, cedulas, cedActivos, tareasRec, tareasEve,
     deletedEveIds: [], tareasArchivo, tareasAV, eventosCalendario,
-    estado, recComs, evalManual, fechasLimiteRec, fechasLimiteRecGlobal
+    estado, recComs, evalManual, fechasLimiteRec, fechasLimiteRecGlobal,
+    horariosDelegados, sabadosLibres, festivos, vacaciones, compensatorioElecciones
   };
   aplicarSnapshotDesdeLocal(snap);
   return { ok: true };
@@ -306,7 +313,8 @@ function programarGuardadoTareaRecurrente(idx) {
 function filaUsuario(u, cedula, activo) {
   return {
     nombre: u.n, cedula, rol: u.rol, cargo: u.cargo || null, equipo: u.equipo || null,
-    avatar: u.av || null, color: u.c || null, activo: activo !== false
+    avatar: u.av || null, color: u.c || null, activo: activo !== false,
+    fecha_ingreso: u.fechaIngreso || null, medio_tiempo: !!u.medioTiempo
   };
 }
 
@@ -684,6 +692,143 @@ async function eliminarEventoEnSupabase(id) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// GUARDADO QUIRÚRGICO — horarios_delegados (turno semanal por conjunto/oficina)
+// Solo Staff edita (Admin). Igual patrón que usuarios/catálogo: id autogenerado por Supabase,
+// se guarda _supabaseId tras el primer insert para que las próximas ediciones usen update().
+// ═══════════════════════════════════════════════════════════════
+function filaHorario(h) {
+  return {
+    conjunto: h.conjunto, delegado: h.delegado, turno: h.turno,
+    hora_entrada: h.hora_entrada || null, hora_salida: h.hora_salida || null,
+    dias_atencion: h.dias_atencion || null, deleted: !!h.deleted
+  };
+}
+
+async function guardarHorarioEnSupabase(idx) {
+  if (!esStaff()) return;
+  const h = DATA.horariosDelegados[idx];
+  if (!h) return;
+  if (h._supabaseId) {
+    const { error } = await SB.from('horarios_delegados').update(filaHorario(h)).eq('id', h._supabaseId);
+    if (error) { console.error('Error actualizando horario en Supabase:', error.message); actualizarIndicadorSync('offline'); return; }
+  } else {
+    const { data, error } = await SB.from('horarios_delegados').insert(filaHorario(h)).select('id').single();
+    if (error) { console.error('Error insertando horario en Supabase:', error.message); actualizarIndicadorSync('offline'); return; }
+    h._supabaseId = data.id;
+  }
+  actualizarIndicadorSync('synced');
+}
+
+async function eliminarHorarioEnSupabase(idx) {
+  if (!esStaff()) return;
+  const h = DATA.horariosDelegados[idx];
+  if (!h || !h._supabaseId) return;
+  const { error } = await SB.from('horarios_delegados').delete().eq('id', h._supabaseId);
+  if (error) { console.error('Error eliminando horario en Supabase:', error.message); actualizarIndicadorSync('offline'); return; }
+  actualizarIndicadorSync('synced');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GUARDADO QUIRÚRGICO — sabados_libres (solicitud/aprobación de sábado libre)
+// El delegado inserta su propia solicitud (RLS lo permite); solo Staff puede aprobar/rechazar
+// (update) o borrar. Cada acción toca solo la fila puntual de esa solicitud.
+// ═══════════════════════════════════════════════════════════════
+async function solicitarSabadoLibreEnSupabase(idx) {
+  const s = DATA.sabadosLibres[idx];
+  if (!s) return;
+  const { data, error } = await SB.from('sabados_libres')
+    .insert({ delegado: s.delegado, fecha: s.fecha, estado: 'pendiente' })
+    .select('id').single();
+  if (error) { console.error('Error solicitando sábado libre en Supabase:', error.message); actualizarIndicadorSync('offline'); return; }
+  s._supabaseId = data.id;
+  actualizarIndicadorSync('synced');
+}
+
+async function resolverSabadoLibreEnSupabase(idx) {
+  if (!esStaff()) return;
+  const s = DATA.sabadosLibres[idx];
+  if (!s || !s._supabaseId) return;
+  const { error } = await SB.from('sabados_libres')
+    .update({ estado: s.estado, resuelto_por: s.resueltoPor || null })
+    .eq('id', s._supabaseId);
+  if (error) { console.error('Error resolviendo sábado libre en Supabase:', error.message); actualizarIndicadorSync('offline'); return; }
+  actualizarIndicadorSync('synced');
+}
+
+async function eliminarSabadoLibreEnSupabase(idx) {
+  const s = DATA.sabadosLibres[idx];
+  if (!s || !s._supabaseId) return;
+  const { error } = await SB.from('sabados_libres').delete().eq('id', s._supabaseId);
+  if (error) { console.error('Error eliminando sábado libre en Supabase:', error.message); actualizarIndicadorSync('offline'); return; }
+  actualizarIndicadorSync('synced');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GUARDADO QUIRÚRGICO — festivos (nombre fijo, año+fecha se cargan a mano en Admin)
+// Solo Staff edita. Cada festivo es único por (anio, nombre) — upsert simple.
+// ═══════════════════════════════════════════════════════════════
+async function guardarFestivoEnSupabase(idx) {
+  if (!esStaff()) return;
+  const f = DATA.festivos[idx];
+  if (!f) return;
+  const { data, error } = await SB.from('festivos')
+    .upsert({ anio: f.anio, nombre: f.nombre, fecha: f.fecha || null }, { onConflict: 'anio,nombre' })
+    .select('id').single();
+  if (error) { console.error('Error guardando festivo en Supabase:', error.message); actualizarIndicadorSync('offline'); return; }
+  f._supabaseId = data.id;
+  actualizarIndicadorSync('synced');
+}
+
+async function eliminarFestivoEnSupabase(idx) {
+  if (!esStaff()) return;
+  const f = DATA.festivos[idx];
+  if (!f || !f._supabaseId) return;
+  const { error } = await SB.from('festivos').delete().eq('id', f._supabaseId);
+  if (error) { console.error('Error eliminando festivo en Supabase:', error.message); actualizarIndicadorSync('offline'); return; }
+  actualizarIndicadorSync('synced');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GUARDADO QUIRÚRGICO — vacaciones (solicitud/aprobación de rango de fechas)
+// Mismo patrón que sabados_libres: el delegado inserta su propia solicitud, solo Staff aprueba/rechaza.
+// ═══════════════════════════════════════════════════════════════
+async function solicitarVacacionEnSupabase(idx) {
+  const v = DATA.vacaciones[idx];
+  if (!v) return;
+  const { data, error } = await SB.from('vacaciones')
+    .insert({ delegado: v.delegado, fecha_inicio: v.fechaInicio, fecha_fin: v.fechaFin, dias_habiles: v.diasHabiles, estado: 'pendiente' })
+    .select('id').single();
+  if (error) { console.error('Error solicitando vacación en Supabase:', error.message); actualizarIndicadorSync('offline'); return; }
+  v._supabaseId = data.id;
+  actualizarIndicadorSync('synced');
+}
+
+async function resolverVacacionEnSupabase(idx) {
+  if (!esStaff()) return;
+  const v = DATA.vacaciones[idx];
+  if (!v || !v._supabaseId) return;
+  const { error } = await SB.from('vacaciones')
+    .update({ estado: v.estado, resuelto_por: v.resueltoPor || null })
+    .eq('id', v._supabaseId);
+  if (error) { console.error('Error resolviendo vacación en Supabase:', error.message); actualizarIndicadorSync('offline'); return; }
+  actualizarIndicadorSync('synced');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GUARDADO QUIRÚRGICO — compensatorio_elecciones (mañana/tarde, solo turno "Día completo")
+// ═══════════════════════════════════════════════════════════════
+async function guardarCompensatorioEleccionEnSupabase(idx) {
+  const e = DATA.compensatorioElecciones[idx];
+  if (!e) return;
+  const { data, error } = await SB.from('compensatorio_elecciones')
+    .upsert({ evento_id: e.eventoId, delegado: e.delegado, eleccion: e.eleccion }, { onConflict: 'evento_id,delegado' })
+    .select('id').single();
+  if (error) { console.error('Error guardando elección de jornada libre en Supabase:', error.message); actualizarIndicadorSync('offline'); return; }
+  e._supabaseId = data.id;
+  actualizarIndicadorSync('synced');
+}
+
+// ═══════════════════════════════════════════════════════════════
 // RESTAURAR BACKUP — reemplaza el restaurarBackup() viejo que escribía a Firebase (nodo muerto,
 // nadie lo leía desde que los datos se migraron a Supabase — bug real, la restauración nunca
 // llegaba a ningún lado). Es la ÚNICA excepción intencional al guardado quirúrgico: restaurar
@@ -714,11 +859,33 @@ async function restaurarBackupEnSupabase(snap) {
       const cedula = Object.keys(snap.cedulas || {}).find(c => snap.cedulas[c].idx === i);
       return u._supabaseId && cedula
         ? { id: u._supabaseId, nombre: u.n, cedula, rol: u.rol, cargo: u.cargo || null, equipo: u.equipo || null,
-            avatar: u.av || null, color: u.c || null, activo: snap.cedulas[cedula].activo !== false }
+            avatar: u.av || null, color: u.c || null, activo: snap.cedulas[cedula].activo !== false,
+            fecha_ingreso: u.fechaIngreso || null, medio_tiempo: !!u.medioTiempo }
         : null;
     }).filter(Boolean);
     if (usuariosRows.length) resultados.push(SB.from('usuarios').upsert(usuariosRows, { onConflict: 'id' }));
+
+    const horariosRows = (snap.horariosDelegados || []).filter(h => h._supabaseId).map(h => ({
+      id: h._supabaseId, conjunto: h.conjunto, delegado: h.delegado, turno: h.turno,
+      hora_entrada: h.hora_entrada || null, hora_salida: h.hora_salida || null,
+      dias_atencion: h.dias_atencion || null, deleted: !!h.deleted
+    }));
+    if (horariosRows.length) resultados.push(SB.from('horarios_delegados').upsert(horariosRows, { onConflict: 'id' }));
+
+    const festivosRows = (snap.festivos || []).map(f => ({ anio: f.anio, nombre: f.nombre, fecha: f.fecha || null }));
+    if (festivosRows.length) resultados.push(SB.from('festivos').upsert(festivosRows, { onConflict: 'anio,nombre' }));
   }
+
+  const sabadosRows = (snap.sabadosLibres || []).filter(s => s._supabaseId).map(s => ({
+    id: s._supabaseId, delegado: s.delegado, fecha: s.fecha, estado: s.estado, resuelto_por: s.resueltoPor || null
+  }));
+  if (sabadosRows.length) resultados.push(SB.from('sabados_libres').upsert(sabadosRows, { onConflict: 'id' }));
+
+  const vacacionesRows = (snap.vacaciones || []).filter(v => v._supabaseId).map(v => ({
+    id: v._supabaseId, delegado: v.delegado, fecha_inicio: v.fechaInicio, fecha_fin: v.fechaFin,
+    dias_habiles: v.diasHabiles, estado: v.estado, resuelto_por: v.resueltoPor || null
+  }));
+  if (vacacionesRows.length) resultados.push(SB.from('vacaciones').upsert(vacacionesRows, { onConflict: 'id' }));
 
   const tareasEveRows = (snap.tareasEve || []).map(t => ({
     id: t.id, conjunto: t.conj, nombre: t.n, obs: t.obs, tipo: t.tipo, encargado: t.enc,

@@ -49,9 +49,29 @@ function puedeEditarEvento(evento) {
 // ─── RENDER: GRILLA MENSUAL ──────────────────────────────────────
 const DIAS_SEMANA = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 
+function renderToggleVistaCalendario() {
+  return `
+    <div class="horw-toggle" style="margin-bottom:10px">
+      <button class="horw-toggle-btn ${VISTA_CALENDARIO === 'semana' ? 'activo' : ''}" onclick="cambiarVistaCalendario('semana')">📆 Semana</button>
+      <button class="horw-toggle-btn ${VISTA_CALENDARIO === 'mes' ? 'activo' : ''}" onclick="cambiarVistaCalendario('mes')">🗓 Mes</button>
+    </div>`;
+}
+
 function renderCalendario() {
   const cont = document.getElementById('content-calendario');
   if (!cont) return;
+
+  cont.innerHTML = `
+    ${renderToggleVistaCalendario()}
+    ${VISTA_CALENDARIO === 'semana' ? renderVistaSemana() : renderVistaMes()}
+    ${renderColaAprobacionSabados()}
+    ${renderMisSabados()}
+    ${renderColaAprobacionVacaciones()}
+    ${renderMisVacaciones()}
+  `;
+}
+
+function renderVistaMes() {
   const mes = getMes();
   const anio = new Date().getFullYear();
   const mesIdx = MESES.indexOf(mes);
@@ -76,29 +96,59 @@ function renderCalendario() {
   const hoy = new Date();
   const esHoy = (d) => d && hoy.getFullYear() === anio && hoy.getMonth() === mesIdx && hoy.getDate() === d;
 
-  cont.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-      <div class="card-title" style="margin:0">📅 ${mes} ${anio}${CONJUNTO_SELECCIONADO && CONJUNTO_SELECCIONADO !== 'Todos' ? ` · ${CONJUNTO_SELECCIONADO}` : ''}</div>
-      <button class="btn btn-v btn-sm" onclick="abrirNuevoEvento()">➕ Nuevo evento</button>
-    </div>
-    <div class="cal-grid">
-      ${DIAS_SEMANA.map(d => `<div class="cal-dow">${d}</div>`).join('')}
-      ${celdas.map(d => renderCeldaDia(d, mesIdx, anio, porFecha, esHoy(d))).join('')}
-    </div>
-  `;
+  const porFechaAusencias = {};
+  ausenciasDelMes(mes).forEach(a => {
+    porFechaAusencias[a.fecha] = porFechaAusencias[a.fecha] || [];
+    porFechaAusencias[a.fecha].push(a);
+  });
+
+  return `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div class="card-title" style="margin:0">📅 ${mes} ${anio}${CONJUNTO_SELECCIONADO && CONJUNTO_SELECCIONADO !== 'Todos' ? ` · ${CONJUNTO_SELECCIONADO}` : ''}</div>
+        <button class="btn btn-v btn-sm" onclick="abrirNuevoEvento()">➕ Nuevo evento</button>
+      </div>
+      <div class="cal-grid">
+        ${DIAS_SEMANA.map(d => `<div class="cal-dow">${d}</div>`).join('')}
+        ${celdas.map(d => renderCeldaDia(d, mesIdx, anio, porFecha, esHoy(d), porFechaAusencias)).join('')}
+      </div>
+    </div>`;
 }
 
-function renderCeldaDia(dia, mesIdx, anio, porFecha, esHoy) {
+function renderCeldaDia(dia, mesIdx, anio, porFecha, esHoy, porFechaAusencias) {
   if (!dia) return `<div class="cal-day cal-day-vacio"></div>`;
   const iso = `${anio}-${String(mesIdx + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
   const eventosDia = (porFecha[iso] || []).sort((a, b) => (a.hora || '').localeCompare(b.hora || ''));
+  const ausenciasDia = (porFechaAusencias && porFechaAusencias[iso]) || [];
+  const festivo = festivoDeFecha(iso);
   const LIMITE = 3;
   const visibles = eventosDia.slice(0, LIMITE);
   const resto = eventosDia.length - visibles.length;
 
   return `
-    <div class="cal-day ${esHoy ? 'cal-day-hoy' : ''}" onclick="abrirNuevoEvento('${iso}')">
+    <div class="cal-day ${esHoy ? 'cal-day-hoy' : ''}" onclick="abrirDetalleDia('${iso}')">
       <div class="cal-daynum">${dia}</div>
+      ${festivo ? `<div class="cal-evento horw-chip-festivo" title="${festivo.nombre}">🎉 ${festivo.nombre}</div>` : ''}
+      ${ausenciasDia.map(a => {
+        if (a.tipo === 'vacaciones') {
+          // Franja continua por semana: sin texto ni redondeo en los días de en medio, para que
+          // se vea como una sola barra que atraviesa la semana (se corta y sigue en la fila siguiente)
+          const d = fechaIsoADate(iso);
+          const esInicioTramo = iso === a.rangoInicio || d.getDay() === 1;
+          const esFinTramo = iso === a.rangoFin || d.getDay() === 0;
+          let cls = 'cal-evento horw-chip-vacaciones franja-vacaciones';
+          if (esInicioTramo) cls += ' franja-inicio';
+          if (esFinTramo) cls += ' franja-fin';
+          return `<div class="${cls}" title="${a.delegado} — ${a.detalle}">${esInicioTramo ? `🏖️ ${a.delegado}` : ''}</div>`;
+        }
+        const emoji = a.tipo === 'sabado' ? '🌞' : a.pendienteEleccion ? '⏳' : '🔄';
+        const etiqueta = a.tipo === 'sabado' ? 'Libre' : a.pendienteEleccion ? 'Jornada libre (por elegir)' : `Jornada libre${a.medioDia ? ` (${a.medioDia === 'manana' ? 'mañana' : 'tarde'})` : ''}`;
+        const cls = a.tipo === 'sabado' ? 'horw-chip-sabado' : 'horw-chip-compensatorio';
+        return `
+        <div class="cal-evento ${cls}" title="${a.delegado} — ${a.detalle}">
+          ${emoji} ${a.delegado} · ${etiqueta}
+        </div>`;
+      }).join('')}
       ${visibles.map(e => `
         <div class="cal-evento" title="${e.titulo || e.tipo}" onclick="event.stopPropagation(); abrirEditarEvento('${e.id}')">
           ${ICONO_TIPO_EVENTO[e.tipo] || '📌'} ${e.hora ? horaAMPM(e.hora) + ' ' : ''}${e.titulo || e.tipo}
@@ -201,6 +251,8 @@ function guardarEvento() {
   if (!fecha) { toast('La fecha es obligatoria'); return; }
   if (!esCapacitacion && !conjuntosMarcados.length) { toast('Selecciona al menos un conjunto'); return; }
   if (esCapacitacion && !participantes.length) { toast('Selecciona al menos un participante'); return; }
+  const festivo = festivoDeFecha(fecha);
+  if (festivo) { toast(`⛔ ${fecha.split('-').reverse().join('/')} es festivo (${festivo.nombre}) — no se pueden programar eventos ese día`, 5000); return; }
 
   const usuario = usuarioActual();
   const editId = document.getElementById('ev-edit-id').value;

@@ -22,7 +22,12 @@ function eventualesVisiblesBase() {
   if (CONJUNTO_SELECCIONADO && CONJUNTO_SELECCIONADO !== 'Todos') {
     lista = lista.filter(t => t.conj === CONJUNTO_SELECCIONADO);
   }
-  return lista;
+  // Más nueva a más vieja, siempre (también con el filtro de conjunto aplicado) — por creadoEn;
+  // si dos tareas no tienen ese timestamp (migradas de v1.0), se desempata por id (T-XXX mayor = más nueva)
+  return [...lista].sort((a, b) => {
+    const diff = (b.creadoEn || 0) - (a.creadoEn || 0);
+    return diff !== 0 ? diff : (b.id || '').localeCompare(a.id || '');
+  });
 }
 
 function eventualesFiltradas() {
@@ -181,7 +186,7 @@ function abrirNuevaEventual() {
       const marcado = filtroEspecifico ? n === CONJUNTO_SELECCIONADO : true;
       return `
       <label style="font-size:10px;background:white;padding:4px 8px;border-radius:6px;border:1px solid var(--brd);cursor:pointer">
-        <input type="checkbox" value="${n}" ${marcado ? 'checked' : ''} ${(!esStaff() && soloUno) ? 'disabled' : ''}> ${n}
+        <input type="checkbox" value="${n}" ${marcado ? 'checked' : ''} ${(!esStaff() && soloUno) ? 'disabled' : ''} onchange="actualizarEncargadosPorConjunto()"> ${n}
       </label>
     `;
     }).join('');
@@ -190,7 +195,37 @@ function abrirNuevaEventual() {
   document.getElementById('nueva-eve-prioridad').onchange = (e) => {
     document.getElementById('nueva-eve-fecha').value = sugerirFechaVencimiento(e.target.value);
   };
+  actualizarEncargadosPorConjunto();
   openOv('modal-nueva-eve');
+}
+
+// Un selector de encargado independiente por cada conjunto marcado: por defecto el delegado de
+// ESE conjunto, así que al crear en varios conjuntos con delegados distintos, cada copia queda
+// con su encargado correcto sin elegirlo uno por uno. Solo Staff ve el selector, y solo puede
+// cambiarlo al usuario que inició sesión (no al resto del equipo) — un delegado nunca ve este
+// bloque, su tarea siempre queda a su propio nombre.
+function actualizarEncargadosPorConjunto() {
+  const wrap = document.getElementById('encargado-por-conjunto');
+  if (!wrap) return;
+  const usuario = usuarioActual();
+  if (!esStaff()) {
+    wrap.innerHTML = `<div style="font-size:10px;color:var(--txs)">${usuario ? usuario.n : ''} (tú)</div>`;
+    return;
+  }
+  const marcados = [...document.querySelectorAll('#multi-conjunto-checks input:checked')].map(i => i.value);
+  if (!marcados.length) { wrap.innerHTML = '<div style="font-size:10px;color:var(--txs)">Selecciona al menos un conjunto</div>'; return; }
+  wrap.innerHTML = marcados.map(n => {
+    const c = conjuntoPorNombre(n);
+    const delegado = c && c.del && c.del !== '—' ? c.del : null;
+    const opciones = [...new Set([delegado, usuario ? usuario.n : null].filter(Boolean))];
+    return `
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="min-width:120px;font-size:10px;color:var(--txs)">${n}:</span>
+        <select class="form-input" style="padding:4px 6px;font-size:10px" data-conjunto-encargado="${n}">
+          ${opciones.map(o => `<option>${o}</option>`).join('')}
+        </select>
+      </div>`;
+  }).join('');
 }
 
 function crearTareaEventual() {
@@ -199,7 +234,6 @@ function crearTareaEventual() {
   const desc = document.getElementById('nueva-eve-desc').value.trim();
   const tipo = document.getElementById('nueva-eve-tipo').value;
   const prioridad = document.getElementById('nueva-eve-prioridad').value;
-  const encargado = document.getElementById('nueva-eve-encargado').value;
   const fechaIso = document.getElementById('nueva-eve-fecha').value;
 
   if (!conjuntosSeleccionados.length) { toast('Selecciona al menos un conjunto'); return; }
@@ -213,6 +247,14 @@ function crearTareaEventual() {
   const idsCreados = [];
   conjuntosSeleccionados.forEach(conj => {
     const id = siguienteIdEventual();
+    let encargado;
+    if (esStaff()) {
+      const sel = document.querySelector(`#encargado-por-conjunto select[data-conjunto-encargado="${conj}"]`);
+      const c = conjuntoPorNombre(conj);
+      encargado = sel ? sel.value : ((c && c.del && c.del !== '—') ? c.del : (usuario ? usuario.n : ''));
+    } else {
+      encargado = usuario ? usuario.n : '';
+    }
     DATA.tareasEve.push({
       id, n: nombre, obs: desc, tipo, conj,
       enc: encargado, ra: (usuario ? usuario.n : '').toLowerCase(),
@@ -252,7 +294,61 @@ function abrirDetalleEventual(id) {
     : '<div style="font-size:10px;color:var(--txs)">Sin comentarios</div>';
   document.getElementById('detalle-eve-com-input').value = '';
   renderBotonesEstadoDetalle(t);
+  // Staff edita siempre; un delegado (que solo ve tareas de su conjunto) puede editar
+  // título/descripción mientras la tarea no llegó a un estado final (Aprobado/Suspendido)
+  const puedeEditar = esStaff() || !ESTADOS_FINALES.includes(t.est);
+  document.getElementById('detalle-eve-btn-editar').classList.toggle('oculto', !puedeEditar);
   openOv('modal-detalle-eve');
+}
+
+// ─── EDICIÓN ───────────────────────────────────────────────────
+// Staff: todos los campos, en cualquier momento. Delegado: solo título/descripción, y solo
+// mientras la tarea no esté Aprobada/Suspendida (regla ya aplicada al mostrar el botón).
+function abrirEditarEventual() {
+  const id = document.getElementById('modal-detalle-eve').dataset.id;
+  const t = DATA.tareasEve.find(t => t.id === id);
+  if (!t) return;
+  document.getElementById('editar-eve-id').value = t.id;
+  document.getElementById('editar-eve-nombre').value = t.n;
+  document.getElementById('editar-eve-desc').value = t.obs;
+  document.getElementById('editar-eve-avanzado').classList.toggle('oculto', !esStaff());
+  if (esStaff()) {
+    document.getElementById('editar-eve-tipo').innerHTML = TIPOS_EVENTUAL.map(tp => `<option ${tp === t.tipo ? 'selected' : ''}>${tp}</option>`).join('');
+    document.getElementById('editar-eve-prioridad').innerHTML = PRIORIDADES.map(p => `<option ${p === t.pri ? 'selected' : ''}>${p}</option>`).join('');
+    document.getElementById('editar-eve-conjunto').innerHTML = todosLosConjuntos().map(c => `<option ${c.n === t.conj ? 'selected' : ''}>${c.n}</option>`).join('');
+    document.getElementById('editar-eve-encargado').innerHTML = DATA.usuarios.map(u => `<option ${u.n === t.enc ? 'selected' : ''}>${u.n}</option>`).join('');
+    document.getElementById('editar-eve-fecha').value = fechaCortaAIso(t.vence);
+  }
+  closeOv('modal-detalle-eve');
+  openOv('modal-editar-eve');
+}
+
+function guardarEdicionEventual() {
+  const id = document.getElementById('editar-eve-id').value;
+  const t = DATA.tareasEve.find(t => t.id === id);
+  if (!t) return;
+  const nombre = document.getElementById('editar-eve-nombre').value.trim();
+  const desc = document.getElementById('editar-eve-desc').value.trim();
+  if (!nombre) { toast('El nombre de la tarea es obligatorio'); return; }
+  if (!desc) { toast('La descripción es obligatoria'); return; }
+  if (!esStaff() && ESTADOS_FINALES.includes(t.est)) { toast('Esta tarea ya no se puede editar'); return; }
+
+  t.n = nombre;
+  t.obs = desc;
+  if (esStaff()) {
+    t.tipo = document.getElementById('editar-eve-tipo').value;
+    t.pri = document.getElementById('editar-eve-prioridad').value;
+    t.conj = document.getElementById('editar-eve-conjunto').value;
+    t.enc = document.getElementById('editar-eve-encargado').value;
+    t.vence = isoAFechaCorta(document.getElementById('editar-eve-fecha').value);
+  }
+
+  guardarLocal();
+  programarGuardadoEventual(id); // guardado individual: solo esta tarea, ninguna otra se toca
+  closeOv('modal-editar-eve');
+  tomarSnapshotEventuales();
+  renderEventuales();
+  toast('✓ Tarea actualizada');
 }
 
 function renderBotonesEstadoDetalle(t) {

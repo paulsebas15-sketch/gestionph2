@@ -21,7 +21,7 @@ function renderDashboard() {
   const evalProm = calcularEvalPromedioMes(mes);
 
   cont.innerHTML = `
-    ${!esStaff() ? renderPendientesDelegado(mes) : ''}
+    ${!esStaff() ? renderResumenHoyDelegado() + renderPendientesDelegado(mes) : ''}
     <div class="stats">
       <div class="stat"><div class="stat-num">${eventualesVisibles.length}</div><div class="stat-lbl">Eventuales totales</div></div>
       <div class="stat"><div class="stat-num red">${vencidas.length}</div><div class="stat-lbl">Vencidas sin cerrar</div></div>
@@ -36,6 +36,47 @@ function renderDashboard() {
     </div>
     ${renderSeccionRendimiento(mes)}
   `;
+}
+
+// Mini-resumen de calendario para HOY: en qué conjunto/turno le toca trabajar (o si está de
+// festivo/sábado libre/vacaciones/compensatorio), más los eventos de Calendario de hoy en sus
+// conjuntos — como abrir el detalle del día de Calendario, pero directo en Resumen.
+function renderResumenHoyDelegado() {
+  const usuario = usuarioActual();
+  const conjs = (usuario && usuario.conjuntos) || [];
+  if (!usuario || !conjs.length) return '';
+
+  const hoyIso = fechaDateAIso(new Date());
+  const dia = nombreDiaSemana(new Date());
+  const festivo = festivoDeFecha(hoyIso);
+  const ausencia = ausenciaDeDelegadoEnFecha(usuario.n, hoyIso);
+  const turnos = turnosDelDelegadoEnDia(usuario.n, dia, hoyIso);
+  const eventosHoy = DATA.eventosCalendario.filter(e =>
+    e.fecha === hoyIso && ((e.conjunto && conjs.includes(e.conjunto)) || (e.tipo === 'Capacitación' && (e.participantes || []).includes(usuario.n)))
+  );
+
+  let estadoTurno;
+  if (festivo) estadoTurno = `🎉 Festivo (${festivo.nombre}) — no trabajas hoy`;
+  else if (ausencia) {
+    estadoTurno = ausencia.tipo === 'sabado' ? '🌞 Tienes sábado libre hoy'
+      : ausencia.tipo === 'vacaciones' ? '🏖️ Estás de vacaciones hoy'
+      : '🔄 Jornada libre hoy (compensatorio de reunión de consejo)';
+  } else if (turnos.length) {
+    estadoTurno = `✓ Trabajas: ${turnos.map(t => `${t.conjunto === NOMBRE_OFICINA ? 'Oficina' : t.conjunto} (${t.turno})`).join(', ')}`;
+  } else {
+    estadoTurno = '— sin turno programado hoy';
+  }
+
+  return `
+    <div class="card" style="background:#eef6f0;border-color:#c3ddc9">
+      <div class="card-title" style="color:var(--v)">📅 Tu día de hoy — ${capitalizar(dia)} ${fechaCortaCol()}</div>
+      <div style="font-size:11px;padding:4px 0">${estadoTurno}</div>
+      ${eventosHoy.length ? eventosHoy.map(e => `
+        <div style="font-size:11px;padding:4px 0;display:flex;justify-content:space-between;cursor:pointer" onclick="cambiarPestana('calendario')">
+          <span>${ICONO_TIPO_EVENTO[e.tipo] || '📌'} ${e.titulo || e.tipo}${e.conjunto ? ` <span style="color:var(--txs);font-size:9px">(${e.conjunto})</span>` : ''}</span>
+          <span style="color:var(--txs);font-size:10px">${e.hora ? horaAMPM(e.hora) : ''}</span>
+        </div>`).join('') : '<div style="font-size:10px;color:var(--txs);padding:4px 0">Sin eventos programados hoy</div>'}
+    </div>`;
 }
 
 // Tarjeta destacada solo para Delegados: sus tareas recurrentes por vencer (las que tienen

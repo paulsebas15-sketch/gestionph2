@@ -31,19 +31,13 @@ function renderAdmin() {
 
   cont.innerHTML = `
     <div class="ibox">⚙️ <strong>Panel de Administración</strong> — Solo gerencia. Gestiona accesos, conjuntos, perfiles y tareas.</div>
+    ${renderAvisoFestivosDiciembre()}
 
     <div class="card">
       <div class="section-title">📊 Uso de almacenamiento</div>
       ${renderBarraCapacidad('Datos (Supabase)', datosMB, LIMITE_DATOS_MB)}
       ${renderBarraCapacidad('Fotos (Supabase Storage)', fotosMB, LIMITE_FOTOS_MB)}
     </div>
-
-    <div class="card" style="border:2px dashed #4a3f8c">
-      <div class="section-title">🔐 Migración a Supabase — provisión de cuentas (TEMPORAL)</div>
-      <div style="font-size:9px;color:var(--txs);margin-bottom:8px">Botón de un solo uso: crea la cuenta de autenticación en Supabase para cada uno de los 11 usuarios ya migrados. Ejecutar UNA sola vez. Al terminar te muestra el SQL para vincularlas.</div>
-      <button class="btn btn-sm" style="background:#4a3f8c;color:white" onclick="provisionarUsuariosSupabase()">🔐 Provisionar cuentas en Supabase</button>
-    </div>
-
 
     <div class="card">
       <div class="section-title">📦 Capacidad del sistema</div>
@@ -88,6 +82,34 @@ function renderAdmin() {
       </table>
     </div>
 
+    ${renderMedioTiempoAdmin()}
+
+    <div class="card">
+      <div class="section-title">🕘 Horarios de delegados (conjuntos y oficina)</div>
+      <div style="font-size:9px;color:var(--txs);margin-bottom:8px">Turno semanal de cada delegado — usado para el panel "Hoy" y las ausencias en Calendario. Usa "${NOMBRE_OFICINA}" como conjunto para las horas de oficina. Un delegado puede tener varias filas (distintos turnos en distintos días).</div>
+      <table class="tbl">
+        <thead><tr><th>Conjunto</th><th>Delegado</th><th>Turno</th><th>Entrada</th><th>Salida</th><th>Días de atención</th><th></th></tr></thead>
+        <tbody>${renderFilasHorarios()}</tbody>
+      </table>
+      <button class="btn btn-v btn-sm" style="margin-top:8px" onclick="agregarFilaHorario()">+ Nueva fila de horario</button>
+    </div>
+
+    <div class="card">
+      <div class="section-title">🎉 Festivos colombianos</div>
+      <div style="font-size:9px;color:var(--txs);margin-bottom:8px">Ningún delegado trabaja en un festivo — bloquea horarios y no deja crear eventos ese día. Cárgalos una vez al año (los nombres ya están fijos, solo falta la fecha de ese año).</div>
+      <div style="margin-bottom:8px">
+        <label class="form-label">Año</label>
+        <select class="form-input" style="width:auto;padding:4px 8px" onchange="cambiarAnioFestivosAdmin(this.value)">
+          ${[new Date().getFullYear(), new Date().getFullYear() + 1, new Date().getFullYear() + 2, new Date().getFullYear() + 3].map(a => `<option ${a === ANIO_FESTIVOS_ADMIN ? 'selected' : ''}>${a}</option>`).join('')}
+        </select>
+      </div>
+      <table class="tbl">
+        <thead><tr><th>Festivo</th><th style="width:160px">Fecha — ${ANIO_FESTIVOS_ADMIN}</th><th></th></tr></thead>
+        <tbody>${renderFilasFestivosAdmin()}</tbody>
+      </table>
+      <button class="btn btn-v btn-sm" style="margin-top:8px" onclick="agregarFestivoCustom()">+ Agregar festivo</button>
+    </div>
+
     <div class="admin-grid">
       <div class="card">
         <div class="section-title">🏘 Conjuntos</div>
@@ -127,7 +149,7 @@ function renderFilasConjuntos() {
       if (c.deleted) return;
       filas.push(`
         <tr>
-          <td style="font-size:10px">${c.n}</td>
+          <td style="font-size:10px"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${c.c || '#4a7c59'};margin-right:5px"></span>${c.n}</td>
           <td style="font-size:9px;color:var(--txs)">${tipo === 'def' ? 'Def' : 'Prov'}</td>
           <td style="font-size:10px">${c.del}</td>
           <td><button class="btn btn-sm btn-g" style="font-size:9px;padding:2px 6px" onclick="abrirEditarConjunto('${tipo}','${c.n}')">✏️</button></td>
@@ -144,6 +166,20 @@ function poblarSelectDelegados(delegadoActual) {
     delegados.map(u => `<option ${u.n === delegadoActual ? 'selected' : ''}>${u.n}</option>`).join('');
 }
 
+function poblarSwatchesColor(colorActual) {
+  const cont = document.getElementById('conj-color-swatches');
+  const elegido = colorActual || PALETA_CONJUNTOS[0];
+  document.getElementById('conj-color').value = elegido;
+  cont.innerHTML = PALETA_CONJUNTOS.map(hex => `
+    <div onclick="elegirColorConjunto('${hex}')" style="width:24px;height:24px;border-radius:50%;background:${hex};cursor:pointer;border:2px solid ${hex === elegido ? 'var(--tx)' : 'transparent'}"></div>
+  `).join('');
+}
+
+function elegirColorConjunto(hex) {
+  document.getElementById('conj-color').value = hex;
+  poblarSwatchesColor(hex);
+}
+
 function abrirNuevoConjunto() {
   document.getElementById('conj-modal-titulo').textContent = '➕ Nuevo conjunto';
   document.getElementById('conj-btn-guardar').textContent = '✓ Crear';
@@ -152,6 +188,7 @@ function abrirNuevoConjunto() {
   document.getElementById('conj-nombre').value = '';
   document.getElementById('conj-tipo').value = 'def';
   poblarSelectDelegados('');
+  poblarSwatchesColor(PALETA_CONJUNTOS[0]);
   openOv('modal-conjunto');
 }
 
@@ -165,6 +202,7 @@ function abrirEditarConjunto(tipoActual, nombreActual) {
   document.getElementById('conj-nombre').value = c.n;
   document.getElementById('conj-tipo').value = tipoActual;
   poblarSelectDelegados(c.del);
+  poblarSwatchesColor(c.c);
   openOv('modal-conjunto');
 }
 
@@ -174,6 +212,7 @@ function guardarConjunto() {
   if (!nuevoNombre) { toast('El nombre es obligatorio'); return; }
   const tipo = document.getElementById('conj-tipo').value;
   const delegado = document.getElementById('conj-delegado').value;
+  const color = document.getElementById('conj-color').value || PALETA_CONJUNTOS[0];
 
   if (nombreActual) {
     // Editando uno existente
@@ -192,6 +231,7 @@ function guardarConjunto() {
     }
     c.n = nuevoNombre;
     c.del = delegado || '—';
+    c.c = color;
     if (tipo !== tipoAnterior) {
       DATA.conjuntos[tipoAnterior] = DATA.conjuntos[tipoAnterior].filter(x => x !== c);
       DATA.conjuntos[tipo] = DATA.conjuntos[tipo] || [];
@@ -205,7 +245,7 @@ function guardarConjunto() {
   } else {
     // Nuevo conjunto
     DATA.conjuntos[tipo] = DATA.conjuntos[tipo] || [];
-    const nuevoConjunto = { n: nuevoNombre, del: delegado || '—', c: '#4a7c59', eval: {} };
+    const nuevoConjunto = { n: nuevoNombre, del: delegado || '—', c: color, eval: {} };
     DATA.conjuntos[tipo].push(nuevoConjunto);
     // Slots vacíos solo en memoria local (para que el conjunto se vea listo de inmediato en
     // Recurrentes) — NO se pre-insertan en Supabase, cada casilla se crea sola al primer toque real.
@@ -296,6 +336,8 @@ function abrirNuevoUsuario() {
   document.getElementById('usr-cargo').value = '';
   document.getElementById('usr-equipo').value = 'Ambos';
   document.getElementById('usr-activo').value = 'true';
+  document.getElementById('usr-fecha-ingreso').value = '';
+  document.getElementById('usr-medio-tiempo').checked = false;
   document.getElementById('usr-conjuntos-wrap').classList.add('oculto');
   openOv('modal-usuario');
 }
@@ -316,6 +358,8 @@ function abrirEditarUsuario(idx) {
   document.getElementById('usr-cargo').value = u.cargo || '';
   document.getElementById('usr-equipo').value = u.equipo || 'Ambos';
   document.getElementById('usr-activo').value = String(activo);
+  document.getElementById('usr-fecha-ingreso').value = u.fechaIngreso || '';
+  document.getElementById('usr-medio-tiempo').checked = !!u.medioTiempo;
   document.getElementById('usr-conjuntos-wrap').classList.remove('oculto');
   document.getElementById('usr-conjuntos-lista').textContent = (u.conjuntos && u.conjuntos.length) ? u.conjuntos.join(', ') : 'Sin conjuntos asignados';
   openOv('modal-usuario');
@@ -330,12 +374,14 @@ function guardarUsuario() {
   const cargo = document.getElementById('usr-cargo').value.trim();
   const equipo = document.getElementById('usr-equipo').value;
   const activo = document.getElementById('usr-activo').value === 'true';
+  const fechaIngreso = document.getElementById('usr-fecha-ingreso').value || null;
+  const medioTiempo = document.getElementById('usr-medio-tiempo').checked;
 
   const editIdx = parseInt(document.getElementById('usr-edit-idx').value, 10);
   let idxGuardado;
   if (editIdx >= 0) {
     const u = DATA.usuarios[editIdx];
-    Object.assign(u, { n: nombre, rol, cargo, equipo });
+    Object.assign(u, { n: nombre, rol, cargo, equipo, fechaIngreso, medioTiempo });
     const cedulaExistente = cedulaPorIdxUsuario(editIdx);
     if (cedulaExistente) DATA.cedulas[cedulaExistente].activo = activo;
     idxGuardado = editIdx;
@@ -343,7 +389,7 @@ function guardarUsuario() {
   } else {
     if (DATA.cedulas[cedula]) { toast('Esa cédula ya está registrada'); return; }
     idxGuardado = DATA.usuarios.length;
-    DATA.usuarios.push({ n: nombre, rol, conjuntos: [], cargo, equipo, av: iniciales(nombre), c: '#4a7c59', ra: nombre.split(' ')[0].toLowerCase() });
+    DATA.usuarios.push({ n: nombre, rol, conjuntos: [], cargo, equipo, fechaIngreso, medioTiempo, av: iniciales(nombre), c: '#4a7c59', ra: nombre.split(' ')[0].toLowerCase() });
     DATA.cedulas[cedula] = { idx: idxGuardado, rol, activo };
     toast('✓ Usuario creado');
   }

@@ -23,6 +23,55 @@ const SESSION_KEY = 'gph_session';
 const BACKUP_KEY = 'gph_lastBackup';
 const CEDULA_BACKUP_AUTOMATICO = '1144085135'; // solo esta cédula recibe el aviso de backup semanal
 
+// ─── HORARIOS Y AUSENCIAS ────────────────────────────────────
+const NOMBRE_OFICINA = 'Oficina A&V'; // pseudo-"conjunto" usado en horarios_delegados para el tiempo de oficina
+const SABADOS_LIBRES_POR_MES = 2; // guía, no límite estricto — Staff puede aprobar excepciones
+const DIAS_SEMANA_LARGO = ['lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado', 'domingo'];
+
+// Turnos preestablecidos: eligiendo uno en Admin autocompleta hora_entrada/hora_salida (siempre
+// guardadas en 24h "H:MM" por dentro — solo la ETIQUETA que ve el usuario va en AM/PM).
+// "Personalizado" deja las horas libres para casos que no encajen en ninguno de estos.
+function etiquetaRangoAMPM(entrada, salida) {
+  return `${horaAMPM(entrada)} - ${horaAMPM(salida)}`;
+}
+const TURNOS_PRESET = [
+  { label: `Mañana (${etiquetaRangoAMPM('8:00', '10:00')})`, entrada: '8:00', salida: '10:00' },
+  { label: `Mañana (${etiquetaRangoAMPM('10:00', '12:00')})`, entrada: '10:00', salida: '12:00' },
+  { label: `Mañana completa (${etiquetaRangoAMPM('8:00', '12:00')})`, entrada: '8:00', salida: '12:00' },
+  { label: `Tarde (${etiquetaRangoAMPM('13:00', '15:00')})`, entrada: '13:00', salida: '15:00' },
+  { label: `Tarde (${etiquetaRangoAMPM('15:00', '17:00')})`, entrada: '15:00', salida: '17:00' },
+  { label: `Tarde completa (${etiquetaRangoAMPM('13:00', '17:00')})`, entrada: '13:00', salida: '17:00' },
+  { label: `Día completo (${etiquetaRangoAMPM('8:00', '17:00')})`, entrada: '8:00', salida: '17:00' },
+  { label: 'Personalizado', entrada: null, salida: null }
+];
+
+// Paleta de colores para diferenciar conjuntos en el calendario (vista semanal) — editable por
+// conjunto desde Admin. "Oficina A&V" NO usa esta paleta, se queda con su color fijo actual.
+const PALETA_CONJUNTOS = [
+  '#4a7c59', '#2980b9', '#c0392b', '#e67e22', '#8e44ad', '#16a085',
+  '#d35400', '#2c3e50', '#c2185b', '#00838f', '#6d4c41', '#5d6d7e'
+];
+
+// Blanco o negro según el color de fondo, para que el texto del chip siempre se lea bien
+function colorTextoContraste(hex) {
+  if (!hex) return '#fff';
+  const h = hex.replace('#', '');
+  const r = parseInt(h.substring(0, 2), 16), g = parseInt(h.substring(2, 4), 16), b = parseInt(h.substring(4, 6), 16);
+  const luminancia = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminancia > 0.6 ? '#1a1a1a' : '#ffffff';
+}
+
+// Los 18 festivos oficiales de Colombia (Ley 51 de 1983 + Ley Emiliani) + 1 fila libre para un
+// festivo adicional excepcional que se autorice fuera de esta lista. El AÑO y la FECHA se
+// cargan a mano cada diciembre desde Admin — este archivo solo fija los NOMBRES, que no cambian.
+const FESTIVOS_NOMBRES = [
+  'Año Nuevo', 'Reyes Magos', 'San José', 'Jueves Santo', 'Viernes Santo',
+  'Día del Trabajo', 'Ascensión del Señor', 'Corpus Christi', 'Sagrado Corazón de Jesús',
+  'San Pedro y San Pablo', 'Día de la Independencia', 'Batalla de Boyacá',
+  'Asunción de la Virgen', 'Día de la Raza', 'Todos los Santos',
+  'Independencia de Cartagena', 'Día de la Inmaculada Concepción', 'Navidad'
+];
+
 // ─── ESTADOS Y CLASIFICACIONES ──────────────────────────────
 const ESTADOS_FINALES = ['Aprobado', 'Suspendido'];
 // Incluye 'Pausado', confirmado en los datos reales de v1.0 (no documentado originalmente en el PRD)
@@ -190,6 +239,30 @@ function restarDiasHabiles(date, n) {
     if (!esFinDeSemana(d)) restantes--;
   }
   return d;
+}
+
+// Quita tildes y pasa a minúsculas — para comparar nombres de día sin depender de cómo se
+// haya escrito el texto libre de "dias_atencion" (con o sin tilde, mayúsculas, etc.)
+function normalizarTexto(s) {
+  return (s || '').toString().normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+}
+
+// Nombre del día (en minúsculas, sin tilde) de una Date — usado contra dias_atencion
+function nombreDiaSemana(date) {
+  return DIAS_SEMANA_LARGO[(date.getDay() + 6) % 7]; // getDay(): 0=domingo → reindexar a lunes=0
+}
+
+// ¿El texto libre "dias_atencion" (ej. "lunes,miercoles, y viernes") incluye este día?
+function diasAtencionIncluye(diasTexto, nombreDia) {
+  return normalizarTexto(diasTexto).includes(nombreDia);
+}
+
+// Regla dura de sábado: solo se permite un turno el sábado si TERMINA a mediodía o antes (no
+// se basa en el nombre del turno — así "Día completo" también queda bloqueado el sábado, igual
+// que cualquier turno que se meta en la tarde)
+function horaSalidaPermiteSabado(horaSalida) {
+  const h = parseInt((horaSalida || '').split(':')[0], 10);
+  return isNaN(h) || h <= 12;
 }
 
 // Semana ISO "YYYY-WNN" — usado para control de backup automático semanal
