@@ -171,6 +171,25 @@ function delegadosParaVistaSemana() {
   return [...new Set(DATA.horariosDelegados.filter(h => !h.deleted).map(h => h.delegado))].sort();
 }
 
+// Eventos de Calendario que aplican a ESTE delegado en ESTA fecha: los tipos con conjunto
+// propio (Reunión de consejo, Recorrido, Reunión con proveedores) si es delegado de ese
+// conjunto, o los tipos masivos (Capacitación/Reuniones masivas) si figura en participantes.
+function eventosDelDelegadoEnFecha(delegado, iso) {
+  return DATA.eventosCalendario.filter(e => {
+    if (e.fecha !== iso) return false;
+    if (TIPOS_EVENTO_MASIVO.includes(e.tipo)) return (e.participantes || []).includes(delegado);
+    return e.conjunto && horariosDeDelegado(delegado).some(h => h.conjunto === e.conjunto);
+  });
+}
+
+function renderChipTurno(t) {
+  const esOficina = t.conjunto === NOMBRE_OFICINA;
+  if (esOficina) return `<div class="horw-chip horw-chip-trabajo">🏢 Oficina</div>`;
+  const c = conjuntoPorNombre(t.conjunto);
+  const color = (c && c.c) || PALETA_CONJUNTOS[0];
+  return `<div class="horw-chip" style="background:${color};color:${colorTextoContraste(color)}">🏘 ${t.conjunto}</div>`;
+}
+
 // Contenido de la viñeta de un delegado en un día puntual — con conjunto filtrado, solo se
 // muestran sus turnos EN ESE conjunto (no en sus otros conjuntos/oficina)
 function celdaSemana(delegado, iso, dia) {
@@ -186,26 +205,71 @@ function celdaSemana(delegado, iso, dia) {
     const texto = ausencia.tipo === 'sabado' ? 'Libre' : 'Vacaciones';
     return `<div class="horw-chip ${cls}">${emoji} ${texto}</div>`;
   }
+
   let turnos = turnosDelDelegadoEnDia(delegado, dia, iso);
   if (CONJUNTO_SELECCIONADO && CONJUNTO_SELECCIONADO !== 'Todos') {
     turnos = turnos.filter(t => t.conjunto === CONJUNTO_SELECCIONADO);
   }
-  if (!turnos.length) return `<div class="horw-cell-vacia">—</div>`;
-  // De más temprano a más tarde (8am arriba, 5pm abajo), sin importar si es conjunto u oficina
-  turnos = [...turnos].sort((a, b) => (parseInt((a.hora_entrada || '0').split(':')[0], 10) || 0) - (parseInt((b.hora_entrada || '0').split(':')[0], 10) || 0));
-  return turnos.map(t => {
-    if (ausencia && ausencia.tipo === 'compensatorio' && ausencia.conjunto === t.conjunto) {
-      if (ausencia.pendienteEleccion) return `<div class="horw-chip horw-chip-compensatorio">⏳ Elegir jornada libre</div>`;
-      const etiquetaMedio = ausencia.medioDia ? ` (${ausencia.medioDia === 'manana' ? 'mañana' : 'tarde'})` : '';
-      return `<div class="horw-chip horw-chip-compensatorio">🔄 Jornada libre${etiquetaMedio}</div>`;
+
+  const eventos = eventosDelDelegadoEnFecha(delegado, iso);
+  const turnosReemplazados = new Set();
+  const piezas = [];
+
+  eventos.forEach(e => {
+    const esMasivo = TIPOS_EVENTO_MASIVO.includes(e.tipo);
+    const esVirtual = e.modalidad === 'virtual';
+    const modalidadTxt = e.modalidad ? (esVirtual ? ' · Virtual' : ' · Presencial') : '';
+    const esOficinaEv = e.conjunto === NOMBRE_OFICINA;
+    const cEv = e.conjunto && !esOficinaEv ? conjuntoPorNombre(e.conjunto) : null;
+
+    // Reuniones masivas/Capacitación cuyo horario se cruza con un turno normal del delegado en
+    // ESE conjunto/oficina: reemplaza visualmente ese turno (mismo color, nueva etiqueta) — el
+    // resto de turnos del día no se toca. Si no se cruza con nada, se agrega aparte.
+    const turnoCruzado = esMasivo
+      ? turnos.find(t => t.conjunto === e.conjunto && !turnosReemplazados.has(t) && e.hora < t.hora_salida && (e.horaFin || e.hora) > t.hora_entrada)
+      : null;
+
+    if (turnoCruzado) {
+      turnosReemplazados.add(turnoCruzado);
+      const etiqueta = `Reunión general ${esOficinaEv ? 'Oficina' : e.conjunto}`;
+      let html;
+      if (esOficinaEv) {
+        html = `<div class="horw-chip horw-chip-trabajo" onclick="event.stopPropagation();abrirEditarEvento('${e.id}')">🏢 ${etiqueta}${modalidadTxt}</div>`;
+      } else {
+        const color = esVirtual ? colorClaro(cEv.c) : cEv.c;
+        html = `<div class="horw-chip" style="background:${color};color:${colorTextoContraste(color)}" onclick="event.stopPropagation();abrirEditarEvento('${e.id}')">🏘 ${etiqueta}${modalidadTxt}</div>`;
+      }
+      piezas.push({ hora: turnoCruzado.hora_entrada, html });
+    } else {
+      const etiquetaTipo = `${ICONO_TIPO_EVENTO[e.tipo] || '📌'} ${e.tipo}`;
+      let html;
+      if (cEv) {
+        const color = esVirtual ? colorClaro(cEv.c) : cEv.c;
+        html = `<div class="horw-chip" style="background:${color};color:${colorTextoContraste(color)}" onclick="event.stopPropagation();abrirEditarEvento('${e.id}')">${etiquetaTipo}${modalidadTxt}</div>`;
+      } else if (esOficinaEv) {
+        html = `<div class="horw-chip horw-chip-trabajo" onclick="event.stopPropagation();abrirEditarEvento('${e.id}')">${etiquetaTipo}${modalidadTxt}</div>`;
+      } else {
+        html = `<div class="horw-chip" style="background:#e2e2e2;color:#444" onclick="event.stopPropagation();abrirEditarEvento('${e.id}')">${etiquetaTipo}${modalidadTxt}</div>`;
+      }
+      piezas.push({ hora: e.hora || '00:00', html });
     }
-    const esOficina = t.conjunto === NOMBRE_OFICINA;
-    const etiqueta = esOficina ? 'Oficina' : t.conjunto;
-    if (esOficina) return `<div class="horw-chip horw-chip-trabajo">🏢 ${etiqueta}</div>`;
-    const c = conjuntoPorNombre(t.conjunto);
-    const color = (c && c.c) || PALETA_CONJUNTOS[0];
-    return `<div class="horw-chip" style="background:${color};color:${colorTextoContraste(color)}">🏘 ${etiqueta}</div>`;
-  }).join('');
+  });
+
+  turnos.forEach(t => {
+    if (turnosReemplazados.has(t)) return;
+    if (ausencia && ausencia.tipo === 'compensatorio' && ausencia.conjunto === t.conjunto) {
+      if (ausencia.pendienteEleccion) { piezas.push({ hora: t.hora_entrada, html: `<div class="horw-chip horw-chip-compensatorio">⏳ Elegir jornada libre</div>` }); return; }
+      const etiquetaMedio = ausencia.medioDia ? ` (${ausencia.medioDia === 'manana' ? 'mañana' : 'tarde'})` : '';
+      piezas.push({ hora: t.hora_entrada, html: `<div class="horw-chip horw-chip-compensatorio">🔄 Jornada libre${etiquetaMedio}</div>` });
+      return;
+    }
+    piezas.push({ hora: t.hora_entrada, html: renderChipTurno(t) });
+  });
+
+  if (!piezas.length) return `<div class="horw-cell-vacia">—</div>`;
+  // De más temprano a más tarde (8am arriba, 5pm abajo)
+  piezas.sort((a, b) => (parseInt((a.hora || '0').split(':')[0], 10) || 0) - (parseInt((b.hora || '0').split(':')[0], 10) || 0));
+  return piezas.map(p => p.html).join('');
 }
 
 function renderVistaSemana() {
@@ -281,19 +345,28 @@ function abrirDetalleDia(iso, delegadoFiltro) {
     const turnosOficina = turnosDelDelegadoEnDia(delegadoFiltro, dia, iso).filter(h => h.conjunto === NOMBRE_OFICINA);
     if (turnosOficina.length) {
       const ausencia = ausenciaDeDelegadoEnFecha(delegadoFiltro, iso);
+      // El compensatorio (jornada libre) es específico de UN conjunto — solo se aplica a la fila
+      // de Oficina si esa fue la fecha/conjunto puntual afectado, no a cualquier compensatorio
+      // que tenga el delegado ese día en otro conjunto (sábado/vacaciones sí bloquean todo el día)
+      const ausenciaAplica = ausencia && (ausencia.tipo !== 'compensatorio' || ausencia.conjunto === NOMBRE_OFICINA);
       let estadoOficina;
       if (festivo) estadoOficina = `🎉 Festivo (${festivo.nombre})`;
-      else if (ausencia) estadoOficina = ausencia.tipo === 'sabado' ? '🌞 Libre (sábado libre)' : ausencia.tipo === 'vacaciones' ? `🏖️ ${ausencia.detalle}` : `🔄 ${ausencia.detalle}`;
+      else if (ausenciaAplica) estadoOficina = ausencia.tipo === 'sabado' ? '🌞 Libre (sábado libre)' : ausencia.tipo === 'vacaciones' ? `🏖️ ${ausencia.detalle}` : `🔄 ${ausencia.detalle}`;
       else estadoOficina = turnosOficina.map(t => `${t.turno} ${t.hora_entrada ? horaAMPM(t.hora_entrada) : '?'} - ${t.hora_salida ? horaAMPM(t.hora_salida) : '?'}`).join(', ');
       filaOficina = `<tr><td style="font-size:10px">🏢 Oficina A&V</td><td style="font-size:10px">${delegadoFiltro}</td><td style="font-size:10px">${estadoOficina}</td></tr>`;
     }
   }
 
   const eventosDia = eventosVisibles().filter(e => e.fecha === iso);
-  const eventosHtml = eventosDia.length ? eventosDia.map(e => `
+  const eventosHtml = eventosDia.length ? eventosDia.map(e => {
+    const horario = e.hora ? `${horaAMPM(e.hora)}${e.horaFin ? ' - ' + horaAMPM(e.horaFin) : ''} ` : '';
+    const modalidadTxt = e.modalidad ? (e.modalidad === 'virtual' ? ' · Virtual' : ' · Presencial') : '';
+    const lugar = e.lugarTipo === 'externo' && e.lugarTexto ? ` · ${e.lugarTexto}` : (e.conjunto ? ` · ${e.conjunto}` : '');
+    return `
     <div class="cal-evento" style="font-size:10px;padding:5px 8px;margin-bottom:4px" onclick="closeOv('modal-dia-detalle');abrirEditarEvento('${e.id}')">
-      ${ICONO_TIPO_EVENTO[e.tipo] || '📌'} ${e.hora ? horaAMPM(e.hora) + ' ' : ''}${e.titulo || e.tipo}${e.conjunto ? ' · ' + e.conjunto : ''}
-    </div>`).join('') : '<div style="font-size:10px;color:var(--txs)">Sin eventos este día</div>';
+      ${ICONO_TIPO_EVENTO[e.tipo] || '📌'} ${horario}${e.titulo || e.tipo}${lugar}${modalidadTxt}
+    </div>`;
+  }).join('') : '<div style="font-size:10px;color:var(--txs)">Sin eventos este día</div>';
 
   const usuario = usuarioActual();
   const esSabado = dia === 'sabado';
@@ -451,6 +524,64 @@ function renderColaAprobacionSabados() {
         </tbody>
       </table>
     </div>`;
+}
+
+// Botón para que Staff asigne sábados libres a varios delegados de una sola vez, ya aprobados
+// (sin pasar por la cola de solicitudes) — para cuando la decisión ya la tomó la administración.
+function renderBotonSabadosMasivos() {
+  if (!esStaff()) return '';
+  return `
+    <div class="card">
+      <div class="section-title">📋 Sábados libres masivos</div>
+      <div style="font-size:9px;color:var(--txs);margin-bottom:8px">Asigna un sábado libre ya aprobado a varios delegados de tiempo completo a la vez, sin pasar por la solicitud individual.</div>
+      <button class="btn btn-v btn-sm" onclick="abrirSabadosMasivos()">➕ Programar sábados masivos</button>
+    </div>`;
+}
+
+function abrirSabadosMasivos() {
+  if (!esStaff()) return;
+  document.getElementById('sabmas-fecha').value = '';
+  const delegadosTC = DATA.usuarios.filter(u => u.rol === 'delegado' && !esMedioTiempo(u.n));
+  document.getElementById('sabmas-delegados').innerHTML = delegadosTC.map(u => `
+    <label style="font-size:10px;background:white;padding:4px 8px;border-radius:6px;border:1px solid var(--brd);cursor:pointer">
+      <input type="checkbox" value="${u.n}"> ${u.n}
+    </label>`).join('') || '<div style="font-size:10px;color:var(--txs)">Sin delegados de tiempo completo</div>';
+  openOv('modal-sabados-masivos');
+}
+
+// Bloqueo con aviso (no impide guardar) — Staff decide con la información completa delante,
+// igual que la validación de "presencial" en eventos.
+function confirmarSabadosMasivos() {
+  if (!esStaff()) return;
+  const fecha = document.getElementById('sabmas-fecha').value;
+  if (!fecha) { toast('Elige la fecha del sábado'); return; }
+  const d = fechaIsoADate(fecha);
+  if (!d || d.getDay() !== 6) { toast('Debes elegir un sábado'); return; }
+  const marcados = [...document.querySelectorAll('#sabmas-delegados input:checked')].map(i => i.value);
+  if (!marcados.length) { toast('Selecciona al menos un delegado'); return; }
+
+  const avisos = marcados.map(delegado => sabadoBloqueadoParaDelegado(delegado, fecha)).filter(Boolean);
+  if (avisos.length && !confirm(`⚠️ Este sábado está bloqueado para algún(os) delegado(s) por sus reglas normales:\n${avisos.join('\n')}\n\n¿Asignarlo igual?`)) return;
+
+  const usuario = usuarioActual();
+  marcados.forEach(delegado => {
+    let s = DATA.sabadosLibres.find(x => x.delegado === delegado && x.fecha === fecha && x.estado !== 'rechazado');
+    if (!s) {
+      s = { delegado, fecha, estado: 'aprobado', solicitadoEn: new Date().toISOString(), resueltoPor: usuario ? usuario.n : '' };
+      DATA.sabadosLibres.push(s);
+      const idx = DATA.sabadosLibres.length - 1;
+      solicitarSabadoLibreEnSupabase(idx); // guardado individual: solo esta fila nueva
+    } else {
+      s.estado = 'aprobado';
+      s.resueltoPor = usuario ? usuario.n : '';
+      const idx = DATA.sabadosLibres.indexOf(s);
+      resolverSabadoLibreEnSupabase(idx); // guardado individual: solo esta fila
+    }
+  });
+  guardarLocal();
+  closeOv('modal-sabados-masivos');
+  toast(`✓ Sábado libre asignado a ${marcados.length} delegado(s)`);
+  renderCalendario();
 }
 
 function renderMisSabados() {

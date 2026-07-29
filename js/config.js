@@ -52,6 +52,16 @@ const PALETA_CONJUNTOS = [
   '#d35400', '#2c3e50', '#c2185b', '#00838f', '#6d4c41', '#5d6d7e'
 ];
 
+// Versión más clara de un color (mezclado con blanco) — usada para diferenciar visualmente un
+// evento VIRTUAL (tono bajo) de uno PRESENCIAL (color completo) del mismo conjunto
+function colorClaro(hex, factor = 0.55) {
+  if (!hex) return hex;
+  const h = hex.replace('#', '');
+  const r = parseInt(h.substring(0, 2), 16), g = parseInt(h.substring(2, 4), 16), b = parseInt(h.substring(4, 6), 16);
+  const mezclar = c => Math.round(c + (255 - c) * factor);
+  return `#${[mezclar(r), mezclar(g), mezclar(b)].map(c => c.toString(16).padStart(2, '0')).join('')}`;
+}
+
 // Blanco o negro según el color de fondo, para que el texto del chip siempre se lea bien
 function colorTextoContraste(hex) {
   if (!hex) return '#fff';

@@ -214,6 +214,7 @@ async function cargarTodoDesdeSupabase() {
 
   const eventosCalendario = (eventosRes.data || []).map(e => ({
     id: e.id, tipo: e.tipo, conjunto: e.conjunto, titulo: e.titulo, fecha: e.fecha, hora: e.hora,
+    horaFin: e.hora_fin, modalidad: e.modalidad, lugarTipo: e.lugar_tipo, lugarTexto: e.lugar_texto,
     descripcion: e.descripcion, participantes: e.participantes || [], creadoPor: e.creado_por
   }));
 
@@ -670,6 +671,7 @@ async function guardarEventoEnSupabase(id) {
   if (!e) return;
   const row = {
     id: e.id, tipo: e.tipo, conjunto: e.conjunto, titulo: e.titulo, fecha: e.fecha, hora: e.hora,
+    hora_fin: e.horaFin || null, modalidad: e.modalidad || null, lugar_tipo: e.lugarTipo || null, lugar_texto: e.lugarTexto || null,
     descripcion: e.descripcion, participantes: e.participantes || [], creado_por: e.creadoPor
   };
   const { error } = await SB.from('eventos_calendario').upsert(row);
@@ -733,11 +735,13 @@ async function eliminarHorarioEnSupabase(idx) {
 // El delegado inserta su propia solicitud (RLS lo permite); solo Staff puede aprobar/rechazar
 // (update) o borrar. Cada acción toca solo la fila puntual de esa solicitud.
 // ═══════════════════════════════════════════════════════════════
+// El estado se toma del objeto local (normalmente 'pendiente' al solicitar uno mismo, pero
+// Staff puede insertarlo directo en 'aprobado' al asignar sábados masivos desde Admin)
 async function solicitarSabadoLibreEnSupabase(idx) {
   const s = DATA.sabadosLibres[idx];
   if (!s) return;
   const { data, error } = await SB.from('sabados_libres')
-    .insert({ delegado: s.delegado, fecha: s.fecha, estado: 'pendiente' })
+    .insert({ delegado: s.delegado, fecha: s.fecha, estado: s.estado || 'pendiente', resuelto_por: s.resueltoPor || null })
     .select('id').single();
   if (error) { console.error('Error solicitando sábado libre en Supabase:', error.message); actualizarIndicadorSync('offline'); return; }
   s._supabaseId = data.id;
@@ -881,6 +885,11 @@ async function restaurarBackupEnSupabase(snap) {
   }));
   if (sabadosRows.length) resultados.push(SB.from('sabados_libres').upsert(sabadosRows, { onConflict: 'id' }));
 
+  const compElecRows = (snap.compensatorioElecciones || []).map(c => ({
+    evento_id: c.eventoId, delegado: c.delegado, eleccion: c.eleccion
+  }));
+  if (compElecRows.length) resultados.push(SB.from('compensatorio_elecciones').upsert(compElecRows, { onConflict: 'evento_id,delegado' }));
+
   const vacacionesRows = (snap.vacaciones || []).filter(v => v._supabaseId).map(v => ({
     id: v._supabaseId, delegado: v.delegado, fecha_inicio: v.fechaInicio, fecha_fin: v.fechaFin,
     dias_habiles: v.diasHabiles, estado: v.estado, resuelto_por: v.resueltoPor || null
@@ -943,6 +952,7 @@ async function restaurarBackupEnSupabase(snap) {
 
   const eventosRows = (snap.eventosCalendario || []).map(e => ({
     id: e.id, tipo: e.tipo, conjunto: e.conjunto, titulo: e.titulo, fecha: e.fecha, hora: e.hora,
+    hora_fin: e.horaFin || null, modalidad: e.modalidad || null, lugar_tipo: e.lugarTipo || null, lugar_texto: e.lugarTexto || null,
     descripcion: e.descripcion, participantes: e.participantes || [], creado_por: e.creadoPor
   }));
   if (eventosRows.length) resultados.push(SB.from('eventos_calendario').upsert(eventosRows));

@@ -2,15 +2,20 @@
 // GestiónPH v2.0
 // Depende de: config.js, datos.js, ui.js, auth.js
 
-const TIPOS_EVENTO = ['Reunión de consejo', 'Recorrido', 'Reunión con proveedores', 'Capacitación', 'Otro'];
-// Un delegado puede crear cualquier tipo salvo Capacitación (solo Staff la organiza)
+const TIPOS_EVENTO = ['Reunión de consejo', 'Recorrido', 'Reunión con proveedores', 'Capacitación', 'Reuniones masivas', 'Otro'];
+// Un delegado puede crear cualquier tipo salvo Capacitación/Reuniones masivas (solo Staff las organiza)
 const TIPOS_EVENTO_DELEGADO = ['Reunión de consejo', 'Recorrido', 'Reunión con proveedores', 'Otro'];
+// Tipos que llevan participantes (transversal, sin un conjunto único) en vez de conjunto(s)
+const TIPOS_EVENTO_MASIVO = ['Capacitación', 'Reuniones masivas'];
+// Tipos que llevan modalidad presencial/virtual
+const TIPOS_EVENTO_CON_MODALIDAD = ['Recorrido', 'Reunión con proveedores', 'Capacitación', 'Reuniones masivas'];
 
 const ICONO_TIPO_EVENTO = {
   'Reunión de consejo': '🏛️',
   'Recorrido': '🚶',
   'Reunión con proveedores': '🤝',
   'Capacitación': '🎓',
+  'Reuniones masivas': '👥',
   'Otro': '📌'
 };
 
@@ -65,6 +70,7 @@ function renderCalendario() {
     ${renderToggleVistaCalendario()}
     ${VISTA_CALENDARIO === 'semana' ? renderVistaSemana() : renderVistaMes()}
     ${renderColaAprobacionSabados()}
+    ${renderBotonSabadosMasivos()}
     ${renderMisSabados()}
     ${renderColaAprobacionVacaciones()}
     ${renderMisVacaciones()}
@@ -149,10 +155,19 @@ function renderCeldaDia(dia, mesIdx, anio, porFecha, esHoy, porFechaAusencias) {
           ${emoji} ${a.delegado} · ${etiqueta}
         </div>`;
       }).join('')}
-      ${visibles.map(e => `
-        <div class="cal-evento" title="${e.titulo || e.tipo}" onclick="event.stopPropagation(); abrirEditarEvento('${e.id}')">
-          ${ICONO_TIPO_EVENTO[e.tipo] || '📌'} ${e.hora ? horaAMPM(e.hora) + ' ' : ''}${e.titulo || e.tipo}
-        </div>`).join('')}
+      ${visibles.map(e => {
+        const cEv = e.conjunto && e.conjunto !== NOMBRE_OFICINA ? conjuntoPorNombre(e.conjunto) : null;
+        const colorBase = cEv ? cEv.c : (e.conjunto === NOMBRE_OFICINA ? '#2980b9' : null);
+        const esVirtual = e.modalidad === 'virtual';
+        const color = colorBase ? (esVirtual ? colorClaro(colorBase) : colorBase) : null;
+        const estiloColor = color ? `background:${color};color:${colorTextoContraste(color)}` : '';
+        const modalidadTxt = e.modalidad ? (esVirtual ? ' · Virtual' : ' · Presencial') : '';
+        const etiqueta = e.tipo === 'Reunión de consejo' && e.conjunto ? `${e.tipo} · ${e.conjunto}` : (e.titulo || e.tipo);
+        return `
+        <div class="cal-evento" style="${estiloColor}" title="${e.titulo || e.tipo}${modalidadTxt}" onclick="event.stopPropagation(); abrirEditarEvento('${e.id}')">
+          ${ICONO_TIPO_EVENTO[e.tipo] || '📌'} ${e.hora ? horaAMPM(e.hora) + ' ' : ''}${etiqueta}${modalidadTxt}
+        </div>`;
+      }).join('')}
       ${resto > 0 ? `<div class="cal-mas" onclick="event.stopPropagation()">+${resto} más</div>` : ''}
     </div>
   `;
@@ -177,14 +192,28 @@ function poblarFormularioEvento() {
     <label style="font-size:10px;background:white;padding:4px 8px;border-radius:6px;border:1px solid var(--brd);cursor:pointer">
       <input type="checkbox" value="${u.n}"> ${u.n}
     </label>`).join('');
+  document.getElementById('ev-lugar-especifico').innerHTML = conjuntosDisponiblesHorario().map(n => `<option>${n}</option>`).join('');
   actualizarVisibilidadCamposEvento();
 }
 
-// Capacitación no lleva conjunto (transversal); el resto sí. Participantes solo aplica a Capacitación.
+// Capacitación/Reuniones masivas no llevan conjunto (transversal, con participantes) — llevan
+// en cambio un "lugar" (conjunto/oficina específico, o lugar externo en texto libre). El resto
+// de tipos sí llevan conjunto(s) directo. La modalidad presencial/virtual solo aplica a los
+// tipos definidos en TIPOS_EVENTO_CON_MODALIDAD.
 function actualizarVisibilidadCamposEvento() {
   const tipo = document.getElementById('ev-tipo').value;
-  document.getElementById('ev-conjunto-wrap').classList.toggle('oculto', tipo === 'Capacitación');
-  document.getElementById('ev-participantes-wrap').classList.toggle('oculto', tipo !== 'Capacitación');
+  const esMasivo = TIPOS_EVENTO_MASIVO.includes(tipo);
+  const conMod = TIPOS_EVENTO_CON_MODALIDAD.includes(tipo);
+  document.getElementById('ev-conjunto-wrap').classList.toggle('oculto', esMasivo);
+  document.getElementById('ev-participantes-wrap').classList.toggle('oculto', !esMasivo);
+  document.getElementById('ev-lugar-wrap').classList.toggle('oculto', !esMasivo);
+  document.getElementById('ev-modalidad-wrap').classList.toggle('oculto', !conMod);
+  if (esMasivo) {
+    const radioLugar = document.querySelector('input[name="ev-lugar-tipo"]:checked');
+    const lugarTipo = radioLugar ? radioLugar.value : 'especifico';
+    document.getElementById('ev-lugar-especifico').classList.toggle('oculto', lugarTipo !== 'especifico');
+    document.getElementById('ev-lugar-externo').classList.toggle('oculto', lugarTipo !== 'externo');
+  }
 }
 
 function abrirNuevoEvento(fechaIso) {
@@ -197,7 +226,12 @@ function abrirNuevoEvento(fechaIso) {
   document.getElementById('ev-titulo').value = '';
   document.getElementById('ev-fecha').value = (typeof fechaIso === 'string') ? fechaIso : '';
   document.getElementById('ev-hora').value = '';
+  document.getElementById('ev-hora-fin').value = '';
   document.getElementById('ev-desc').value = '';
+  document.querySelector('input[name="ev-modalidad"][value="presencial"]').checked = true;
+  document.querySelector('input[name="ev-lugar-tipo"][value="especifico"]').checked = true;
+  document.getElementById('ev-lugar-externo').value = '';
+  actualizarVisibilidadCamposEvento();
   // Si hay un conjunto específico elegido en el header, marcarlo por defecto
   if (CONJUNTO_SELECCIONADO && CONJUNTO_SELECCIONADO !== 'Todos') {
     const chk = document.querySelector(`#ev-conjunto-checks input[value="${CONJUNTO_SELECCIONADO}"]`);
@@ -220,11 +254,16 @@ function abrirEditarEvento(id) {
   document.getElementById('ev-titulo').value = e.titulo || '';
   document.getElementById('ev-fecha').value = e.fecha;
   document.getElementById('ev-hora').value = e.hora || '';
+  document.getElementById('ev-hora-fin').value = e.horaFin || '';
   document.getElementById('ev-desc').value = e.descripcion || '';
+  document.querySelector(`input[name="ev-modalidad"][value="${e.modalidad || 'presencial'}"]`).checked = true;
+  document.querySelector(`input[name="ev-lugar-tipo"][value="${e.lugarTipo === 'externo' ? 'externo' : 'especifico'}"]`).checked = true;
+  document.getElementById('ev-lugar-externo').value = e.lugarTexto || '';
   actualizarVisibilidadCamposEvento();
   if (e.conjunto) {
     const chk = document.querySelector(`#ev-conjunto-checks input[value="${e.conjunto}"]`);
     if (chk) chk.checked = true;
+    document.getElementById('ev-lugar-especifico').value = e.conjunto;
   }
   (e.participantes || []).forEach(nombre => {
     const chk = document.querySelector(`#ev-participantes input[value="${nombre}"]`);
@@ -238,21 +277,49 @@ function abrirEditarEvento(id) {
 // puede tener un conjunto — si marcas varios al editar, se usa el primero.
 function guardarEvento() {
   const tipo = document.getElementById('ev-tipo').value;
-  const esCapacitacion = tipo === 'Capacitación';
-  const conjuntosMarcados = esCapacitacion ? [] : [...document.querySelectorAll('#ev-conjunto-checks input:checked')].map(i => i.value);
+  const esMasivo = TIPOS_EVENTO_MASIVO.includes(tipo);
+  const conMod = TIPOS_EVENTO_CON_MODALIDAD.includes(tipo);
+  const conjuntosMarcados = esMasivo ? [] : [...document.querySelectorAll('#ev-conjunto-checks input:checked')].map(i => i.value);
   const titulo = document.getElementById('ev-titulo').value.trim();
   const fecha = document.getElementById('ev-fecha').value;
   const hora = document.getElementById('ev-hora').value;
+  const horaFin = document.getElementById('ev-hora-fin').value;
   const descripcion = document.getElementById('ev-desc').value.trim();
-  const participantes = esCapacitacion
+  const participantes = esMasivo
     ? [...document.querySelectorAll('#ev-participantes input:checked')].map(i => i.value)
     : [];
+  const modalidad = conMod ? (document.querySelector('input[name="ev-modalidad"]:checked') || {}).value : null;
+  const lugarTipoRadio = esMasivo ? (document.querySelector('input[name="ev-lugar-tipo"]:checked') || {}).value : null;
+  const lugarEspecifico = document.getElementById('ev-lugar-especifico').value;
+  const lugarTexto = document.getElementById('ev-lugar-externo').value.trim();
+  const conjuntoMasivo = esMasivo && lugarTipoRadio === 'especifico' ? lugarEspecifico : null;
 
   if (!fecha) { toast('La fecha es obligatoria'); return; }
-  if (!esCapacitacion && !conjuntosMarcados.length) { toast('Selecciona al menos un conjunto'); return; }
-  if (esCapacitacion && !participantes.length) { toast('Selecciona al menos un participante'); return; }
+  if (!hora || !horaFin) { toast('La hora de inicio y de fin son obligatorias'); return; }
+  if (horaFin <= hora) { toast('La hora de fin debe ser después de la hora de inicio'); return; }
+  if (!esMasivo && !conjuntosMarcados.length) { toast('Selecciona al menos un conjunto'); return; }
+  if (esMasivo && !participantes.length) { toast('Selecciona al menos un participante'); return; }
+  if (esMasivo && lugarTipoRadio === 'externo' && !lugarTexto) { toast('Escribe el lugar externo'); return; }
   const festivo = festivoDeFecha(fecha);
   if (festivo) { toast(`⛔ ${fecha.split('-').reverse().join('/')} es festivo (${festivo.nombre}) — no se pueden programar eventos ese día`, 5000); return; }
+
+  // Aviso (no bloqueo) si es presencial y el horario no cae dentro de la atención real del
+  // delegado en ese conjunto — igual aplica para Reuniones masivas/Capacitación en un conjunto
+  if (conMod && modalidad === 'presencial') {
+    const conjuntoAValidar = esMasivo ? conjuntoMasivo : conjuntosMarcados[0];
+    if (conjuntoAValidar && conjuntoAValidar !== NOMBRE_OFICINA) {
+      const c = conjuntoPorNombre(conjuntoAValidar);
+      const delegado = c && c.del;
+      if (delegado && delegado !== '—') {
+        const dia = nombreDiaSemana(fechaIsoADate(fecha));
+        const turnosDia = turnosDelDelegadoEnDia(delegado, dia, fecha).filter(t => t.conjunto === conjuntoAValidar);
+        const cabeEnAlguno = turnosDia.some(t => hora >= t.hora_entrada && horaFin <= t.hora_salida);
+        if (!cabeEnAlguno) {
+          if (!confirm(`⚠️ Este horario (${horaAMPM(hora)} - ${horaAMPM(horaFin)}) no coincide con la atención real de ${delegado} en ${conjuntoAValidar} ese día. ¿Guardar de todas formas?`)) return;
+        }
+      }
+    }
+  }
 
   const usuario = usuarioActual();
   const editId = document.getElementById('ev-edit-id').value;
@@ -261,15 +328,19 @@ function guardarEvento() {
   if (editId) {
     const e = DATA.eventosCalendario.find(e => e.id === editId);
     if (!e || !puedeEditarEvento(e)) { toast('No puedes editar este evento'); return; }
-    const conjunto = esCapacitacion ? null : (conjuntosMarcados[0] || null);
-    Object.assign(e, { tipo, conjunto, titulo, fecha, hora, descripcion, participantes });
+    const conjunto = esMasivo ? conjuntoMasivo : (conjuntosMarcados[0] || null);
+    Object.assign(e, {
+      tipo, conjunto, titulo, fecha, hora, horaFin, descripcion, participantes,
+      modalidad, lugarTipo: esMasivo ? lugarTipoRadio : null, lugarTexto: esMasivo && lugarTipoRadio === 'externo' ? lugarTexto : null
+    });
     idsGuardados.push(editId);
     if (tipo === 'Reunión de consejo' && conjunto) sincronizarFechaConsejo(conjunto, fecha);
     toast('✓ Evento actualizado');
-  } else if (esCapacitacion) {
+  } else if (esMasivo) {
     const id = siguienteIdEvento();
     DATA.eventosCalendario.push({
-      id, tipo, conjunto: null, titulo, fecha, hora, descripcion, participantes,
+      id, tipo, conjunto: conjuntoMasivo, titulo, fecha, hora, horaFin, descripcion, participantes,
+      modalidad, lugarTipo: lugarTipoRadio, lugarTexto: lugarTipoRadio === 'externo' ? lugarTexto : null,
       creadoPor: usuario ? usuario.n : '', createdAt: Date.now()
     });
     idsGuardados.push(id);
@@ -278,7 +349,8 @@ function guardarEvento() {
     conjuntosMarcados.forEach(conjunto => {
       const id = siguienteIdEvento();
       DATA.eventosCalendario.push({
-        id, tipo, conjunto, titulo, fecha, hora, descripcion, participantes: [],
+        id, tipo, conjunto, titulo, fecha, hora, horaFin, descripcion, participantes: [],
+        modalidad, lugarTipo: null, lugarTexto: null,
         creadoPor: usuario ? usuario.n : '', createdAt: Date.now()
       });
       idsGuardados.push(id);
