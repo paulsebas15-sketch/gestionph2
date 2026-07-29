@@ -227,6 +227,25 @@
     </div>
   </div>
 
+  <!-- ═══ MODAL: SÁBADOS LIBRES MASIVOS (solo Staff) ═══ -->
+  <div class="modal-overlay oculto" id="modal-sabados-masivos">
+    <div class="modal">
+      <div class="modal-title">🌞 Programar sábados libres masivos</div>
+      <div class="form-group">
+        <label class="form-label">Sábado</label>
+        <input class="form-input" type="date" id="sabmas-fecha">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Delegados <span style="font-size:9px;color:var(--txs)">(solo tiempo completo)</span></label>
+        <div id="sabmas-delegados" style="display:flex;flex-wrap:wrap;gap:6px;background:var(--b);padding:8px;border-radius:7px;border:1px solid var(--brd)"></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:4px">
+        <button class="btn btn-g" style="flex:1" onclick="closeOv('modal-sabados-masivos')">Cancelar</button>
+        <button class="btn btn-v" style="flex:2" onclick="confirmarSabadosMasivos()">✓ Asignar aprobado</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ═══ MODAL: SOLICITAR VACACIONES ═══ -->
   <div class="modal-overlay oculto" id="modal-solicitar-vacacion">
     <div class="modal">
@@ -438,13 +457,33 @@
           <input class="form-input" type="date" id="ev-fecha">
         </div>
         <div class="form-group">
-          <label class="form-label">Hora</label>
+          <label class="form-label">Hora inicio *</label>
           <input class="form-input" type="time" id="ev-hora">
         </div>
+        <div class="form-group">
+          <label class="form-label">Hora fin *</label>
+          <input class="form-input" type="time" id="ev-hora-fin">
+        </div>
+      </div>
+      <div class="form-group oculto" id="ev-modalidad-wrap">
+        <label class="form-label">Modalidad</label>
+        <div style="display:flex;gap:14px">
+          <label style="font-size:11px;display:flex;align-items:center;gap:5px;cursor:pointer"><input type="radio" name="ev-modalidad" value="presencial" checked> Presencial</label>
+          <label style="font-size:11px;display:flex;align-items:center;gap:5px;cursor:pointer"><input type="radio" name="ev-modalidad" value="virtual"> Virtual</label>
+        </div>
+      </div>
+      <div class="form-group oculto" id="ev-lugar-wrap">
+        <label class="form-label">Lugar</label>
+        <div style="display:flex;gap:14px;margin-bottom:6px">
+          <label style="font-size:11px;display:flex;align-items:center;gap:5px;cursor:pointer"><input type="radio" name="ev-lugar-tipo" value="especifico" checked onchange="actualizarVisibilidadCamposEvento()"> Conjunto / Oficina</label>
+          <label style="font-size:11px;display:flex;align-items:center;gap:5px;cursor:pointer"><input type="radio" name="ev-lugar-tipo" value="externo" onchange="actualizarVisibilidadCamposEvento()"> Lugar externo</label>
+        </div>
+        <select class="form-input oculto" id="ev-lugar-especifico"></select>
+        <input class="form-input oculto" id="ev-lugar-externo" placeholder="Ej. Centro de Eventos Valle del Pacífico">
       </div>
       <div class="form-group">
         <label class="form-label">Descripción</label>
-        <textarea class="form-input" id="ev-desc" placeholder="Detalles, agenda, lugar…"></textarea>
+        <textarea class="form-input" id="ev-desc" placeholder="Detalles, agenda…"></textarea>
       </div>
       <div class="form-group oculto" id="ev-participantes-wrap">
         <label class="form-label">Participantes *</label>
