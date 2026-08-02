@@ -82,6 +82,24 @@ async function cargarContadorFotos() {
   }
 }
 
+// Supabase (PostgREST) limita cada consulta a 1000 filas por defecto, sin avisar si corta el
+// resto — un .select('*') normal en una tabla que ya superó las 1000 filas devuelve datos
+// incompletos EN SILENCIO (bug real detectado: recurrentes_estado ya pasó ese límite y Staff
+// veía menos avance del real). Esta función trae TODO, pidiendo de a 1000 en 1000 hasta agotar.
+const PAGINA_TAMANO_FETCH = 1000;
+async function fetchTodasLasFilas(queryBuilder) {
+  let desde = 0;
+  let todas = [];
+  while (true) {
+    const { data, error } = await queryBuilder().range(desde, desde + PAGINA_TAMANO_FETCH - 1);
+    if (error) return { data: null, error };
+    todas = todas.concat(data || []);
+    if (!data || data.length < PAGINA_TAMANO_FETCH) break;
+    desde += PAGINA_TAMANO_FETCH;
+  }
+  return { data: todas, error: null };
+}
+
 async function cargarTodoDesdeSupabase() {
   const [
     conjuntosRes, usuariosRes, delegadoConjRes, catalogoRes,
@@ -92,15 +110,15 @@ async function cargarTodoDesdeSupabase() {
     SB.from('usuarios').select('*'),
     SB.from('delegado_conjuntos').select('*'),
     SB.from('tareas_recurrentes_catalogo').select('*').order('id'),
-    SB.from('tareas_eventuales').select('*'),
-    SB.from('tareas_archivo').select('*'),
-    SB.from('recurrentes_estado').select('*'),
-    SB.from('recurrentes_comentarios').select('*'),
+    fetchTodasLasFilas(() => SB.from('tareas_eventuales').select('*')),
+    fetchTodasLasFilas(() => SB.from('tareas_archivo').select('*')),
+    fetchTodasLasFilas(() => SB.from('recurrentes_estado').select('*')),
+    fetchTodasLasFilas(() => SB.from('recurrentes_comentarios').select('*')),
     SB.from('evaluacion_manual').select('*'),
-    SB.from('fechas_limite').select('*'),
+    fetchTodasLasFilas(() => SB.from('fechas_limite').select('*')),
     SB.from('fechas_limite_global').select('*'),
     SB.from('tareas_av').select('*'),
-    SB.from('eventos_calendario').select('*'),
+    fetchTodasLasFilas(() => SB.from('eventos_calendario').select('*')),
     SB.from('horarios_delegados').select('*'),
     SB.from('sabados_libres').select('*'),
     SB.from('festivos').select('*'),
