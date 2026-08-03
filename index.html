@@ -420,6 +420,10 @@
           <input type="checkbox" id="usr-medio-tiempo"> Trabaja medio tiempo (sin sábados libres ni compensatorio de reunión)
         </label>
       </div>
+      <div class="form-group">
+        <label class="form-label">Vencimiento de contrato <span style="font-size:9px;color:var(--txs)">(solo término fijo, dejar vacío si es indefinido)</span></label>
+        <input class="form-input" type="date" id="usr-fecha-vencimiento-contrato">
+      </div>
       <div class="form-group" id="usr-conjuntos-wrap">
         <label class="form-label">Conjuntos asignados</label>
         <div id="usr-conjuntos-lista" style="font-size:10px;color:var(--txs);background:var(--b);padding:8px;border-radius:7px">—</div>
@@ -493,6 +497,119 @@
         <button class="btn btn-r btn-sm oculto" id="ev-btn-eliminar" onclick="eliminarEvento()">🗑 Eliminar</button>
         <button class="btn btn-g" style="flex:1" onclick="closeOv('modal-evento')">Cancelar</button>
         <button class="btn btn-v" style="flex:2" id="ev-btn-guardar" onclick="guardarEvento()">✓ Crear</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ MODAL: NUEVA TAREA A&V ═══ -->
+  <div class="modal-overlay oculto" id="modal-nueva-av">
+    <div class="modal">
+      <div class="modal-title">➕ Nueva tarea A&V</div>
+      <form id="form-nueva-av">
+        <div class="form-group">
+          <label class="form-label">Nombre de la tarea *</label>
+          <input class="form-input" id="av-nombre" placeholder="Ej. Renovar póliza de seguros">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Descripción / Observación *</label>
+          <textarea class="form-input" id="av-desc" placeholder="Detalla la situación, urgencia…"></textarea>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Tipo</label>
+            <select class="form-input" id="av-tipo"></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Prioridad</label>
+            <select class="form-input" id="av-prioridad"></select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Encargado</label>
+            <select class="form-input" id="av-encargado"></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Fecha de vencimiento</label>
+            <input class="form-input" type="date" id="av-fecha">
+          </div>
+        </div>
+      </form>
+      <div style="display:flex;gap:8px;margin-top:4px">
+        <button class="btn btn-g" style="flex:1" onclick="closeOv('modal-nueva-av')">Cancelar</button>
+        <button class="btn btn-v" style="flex:2" onclick="crearTareaAV()">✓ Crear tarea</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ MODAL: DETALLE TAREA A&V ═══ -->
+  <div class="modal-overlay oculto" id="modal-detalle-av">
+    <div class="modal">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+        <div>
+          <div class="modal-title" style="margin-bottom:4px" id="detalle-av-nombre"></div>
+          <div style="font-size:10px;color:var(--txs)" id="detalle-av-meta"></div>
+        </div>
+        <span id="detalle-av-prioridad"></span>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:12px">
+        <span id="detalle-av-estado"></span>
+        <span style="font-size:10px;color:var(--txs);display:flex;align-items:center" id="detalle-av-tipo"></span>
+        <span class="sem" style="margin-left:auto" id="detalle-av-sem"></span>
+      </div>
+      <div style="background:var(--b);border-radius:8px;padding:10px;font-size:11px;margin-bottom:10px;line-height:1.5" id="detalle-av-obs"></div>
+      <div style="font-size:9px;color:var(--txs);margin-bottom:10px" id="detalle-av-fechas"></div>
+      <div style="font-size:11px;font-weight:600;margin-bottom:6px">💬 Comentarios</div>
+      <div style="background:var(--b);border-radius:8px;padding:8px;margin-bottom:8px" id="detalle-av-coms"></div>
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        <input class="form-input" style="flex:1;font-size:10px;padding:6px 8px" id="detalle-av-com-input" placeholder="Agregar comentario…">
+        <button class="btn btn-v btn-sm" onclick="enviarComentarioAV()">Enviar</button>
+      </div>
+      <div style="font-size:10px;font-weight:600;margin-bottom:6px">Cambiar estado:</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap" id="detalle-av-acciones"></div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn btn-g" style="flex:1" onclick="abrirEditarAV()">✏️ Editar</button>
+        <button class="btn btn-g" style="flex:1" onclick="closeOv('modal-detalle-av')">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ MODAL: EDITAR TAREA A&V ═══ -->
+  <div class="modal-overlay oculto" id="modal-editar-av">
+    <div class="modal">
+      <div class="modal-title">✏️ Editar tarea A&V</div>
+      <input type="hidden" id="editar-av-id">
+      <div class="form-group">
+        <label class="form-label">Nombre de la tarea *</label>
+        <input class="form-input" id="editar-av-nombre">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Descripción / Observación *</label>
+        <textarea class="form-input" id="editar-av-desc"></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Tipo</label>
+          <select class="form-input" id="editar-av-tipo"></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Prioridad</label>
+          <select class="form-input" id="editar-av-prioridad"></select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Encargado</label>
+          <select class="form-input" id="editar-av-encargado"></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Fecha de vencimiento</label>
+          <input class="form-input" type="date" id="editar-av-fecha">
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:4px">
+        <button class="btn btn-g" style="flex:1" onclick="closeOv('modal-editar-av')">Cancelar</button>
+        <button class="btn btn-v" style="flex:2" onclick="guardarEdicionAV()">✓ Guardar cambios</button>
       </div>
     </div>
   </div>
