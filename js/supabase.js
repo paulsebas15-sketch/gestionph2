@@ -13,7 +13,14 @@ function actualizarIndicadorSync(estado) {
   // también en localStorage (no solo en memoria) para que la marca sobreviva a un cierre/recarga
   // completo del navegador — así se puede avisar al reabrir, no solo en la misma sesión.
   HAY_CAMBIOS_SIN_SINCRONIZAR = estado === 'offline';
-  if (estado === 'offline') localStorage.setItem(PENDIENTE_OFFLINE_KEY, '1');
+  if (estado === 'offline') {
+    localStorage.setItem(PENDIENTE_OFFLINE_KEY, '1');
+    // Antes esto solo quedaba en el ícono del header (fácil de no notar) y en console.error —
+    // un guardado que fallara en el servidor podía pasar completamente desapercibido para quien
+    // lo hizo (ver caso real: evento de calendario rechazado por Supabase, nadie se enteró hasta
+    // que otro usuario no lo vio). Ahora avisa siempre con un toast visible.
+    if (typeof toast === 'function') toast('⚠️ No se pudo guardar en el servidor — revisa tu conexión e inténtalo de nuevo', 5000);
+  }
   else if (estado === 'synced') localStorage.removeItem(PENDIENTE_OFFLINE_KEY);
 }
 
