@@ -304,26 +304,51 @@ function guardarEvento() {
   const festivo = festivoDeFecha(fecha);
   if (festivo) { toast(`⛔ ${fecha.split('-').reverse().join('/')} es festivo (${festivo.nombre}) — no se pueden programar eventos ese día`, 5000); return; }
 
+  const editId = document.getElementById('ev-edit-id').value;
+
+  // Bloqueo duro: un mismo delegado/participante no puede quedar en dos eventos cruzados en
+  // horario — no se puede guardar hasta cambiar la hora o quitarlo de uno de los dos.
+  const delegadosAfectados = esMasivo
+    ? participantes
+    : [...new Set(conjuntosMarcados.map(cn => { const c = conjuntoPorNombre(cn); return c && c.del; }).filter(d => d && d !== '—'))];
+  for (const delegadoAfectado of delegadosAfectados) {
+    const choque = eventosDelDelegadoEnFecha(delegadoAfectado, fecha).find(e =>
+      e.id !== editId && e.hora && (e.horaFin || e.hora) && e.hora < horaFin && (e.horaFin || e.hora) > hora
+    );
+    if (choque) {
+      toast(`⛔ ${delegadoAfectado} ya tiene "${choque.titulo || choque.tipo}" agendado ese día de ${horaAMPM(choque.hora)} a ${horaAMPM(choque.horaFin || choque.hora)}. Cambia la hora o quita a ${delegadoAfectado} de uno de los dos eventos.`, 6000);
+      return;
+    }
+  }
+
   // Aviso (no bloqueo) si es presencial y el horario no cae dentro de la atención real del
-  // delegado en ese conjunto — igual aplica para Reuniones masivas/Capacitación en un conjunto
-  if (conMod && modalidad === 'presencial') {
+  // delegado en ese conjunto — aplica a cualquier tipo con conjunto propio salvo Reunión de
+  // consejo (casi siempre en la noche, fuera de horario de atención de todas formas) y salvo
+  // virtual (no requiere presencia física, no hay conflicto de lugar que validar).
+  if (tipo !== 'Reunión de consejo' && modalidad !== 'virtual') {
     const conjuntoAValidar = esMasivo ? conjuntoMasivo : conjuntosMarcados[0];
     if (conjuntoAValidar && conjuntoAValidar !== NOMBRE_OFICINA) {
       const c = conjuntoPorNombre(conjuntoAValidar);
       const delegado = c && c.del;
       if (delegado && delegado !== '—') {
         const dia = nombreDiaSemana(fechaIsoADate(fecha));
-        const turnosDia = turnosDelDelegadoEnDia(delegado, dia, fecha).filter(t => t.conjunto === conjuntoAValidar);
+        const turnosDelDia = turnosDelDelegadoEnDia(delegado, dia, fecha);
+        const turnosDia = turnosDelDia.filter(t => t.conjunto === conjuntoAValidar);
         const cabeEnAlguno = turnosDia.some(t => hora >= t.hora_entrada && horaFin <= t.hora_salida);
         if (!cabeEnAlguno) {
-          if (!confirm(`⚠️ Este horario (${horaAMPM(hora)} - ${horaAMPM(horaFin)}) no coincide con la atención real de ${delegado} en ${conjuntoAValidar} ese día. ¿Guardar de todas formas?`)) return;
+          // Si además se cruza con la atención real de OTRO conjunto de este mismo delegado, el
+          // aviso lo dice explícitamente — ese es el turno que quedaría reemplazado en su horario.
+          const turnoCruzado = turnosDelDia.find(t => t.conjunto !== conjuntoAValidar && hora < t.hora_salida && horaFin > t.hora_entrada);
+          const msg = turnoCruzado
+            ? `⚠️ Este horario (${horaAMPM(hora)} - ${horaAMPM(horaFin)}) no coincide con la atención real de ${delegado} en ${conjuntoAValidar}, y cancelaría su atención en ${turnoCruzado.conjunto} ese mismo horario. ¿Confirmas agendarlo así?`
+            : `⚠️ Este horario (${horaAMPM(hora)} - ${horaAMPM(horaFin)}) no coincide con la atención real de ${delegado} en ${conjuntoAValidar} ese día. ¿Guardar de todas formas?`;
+          if (!confirm(msg)) return;
         }
       }
     }
   }
 
   const usuario = usuarioActual();
-  const editId = document.getElementById('ev-edit-id').value;
 
   const idsGuardados = [];
   if (editId) {

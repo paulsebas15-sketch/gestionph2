@@ -173,47 +173,39 @@ function celdaSemana(delegado, iso, dia) {
   }
 
   const eventos = eventosDelDelegadoEnFecha(delegado, iso);
-  const turnosReemplazados = new Set();
   const piezas = [];
 
+  // Cualquier evento (de cualquier tipo) que se cruce en horario con un turno de atención lo
+  // reemplaza por completo en la celda — el delegado no puede estar físicamente en dos lugares
+  // a la vez. Ya no importa si el evento es del mismo conjunto que el turno, de otro conjunto,
+  // de oficina o externo: si se cruzan en hora, el turno desaparece y solo se ve el evento. La
+  // validación de si ESE cruce tenía sentido (avisar/bloquear) ya pasó al guardar el evento
+  // (ver guardarEvento()) — acá solo se refleja el resultado.
+  const turnosOcultos = new Set();
   eventos.forEach(e => {
-    const esMasivo = TIPOS_EVENTO_MASIVO.includes(e.tipo);
+    const hFin = e.horaFin || e.hora;
+    if (!e.hora || !hFin) return;
+    turnos.forEach(t => {
+      if (!turnosOcultos.has(t) && e.hora < t.hora_salida && hFin > t.hora_entrada) turnosOcultos.add(t);
+    });
+  });
+
+  eventos.forEach(e => {
     const esVirtual = e.modalidad === 'virtual';
     const modalidadTxt = e.modalidad ? (esVirtual ? ' · Virtual' : ' · Presencial') : '';
     const esOficinaEv = e.conjunto === NOMBRE_OFICINA;
     const cEv = e.conjunto && !esOficinaEv ? conjuntoPorNombre(e.conjunto) : null;
-
-    // Reuniones masivas/Capacitación cuyo horario se cruza con un turno normal del delegado en
-    // ESE conjunto/oficina: reemplaza visualmente ese turno (mismo color, nueva etiqueta) — el
-    // resto de turnos del día no se toca. Si no se cruza con nada, se agrega aparte.
-    const turnoCruzado = esMasivo
-      ? turnos.find(t => t.conjunto === e.conjunto && !turnosReemplazados.has(t) && e.hora < t.hora_salida && (e.horaFin || e.hora) > t.hora_entrada)
-      : null;
-
-    if (turnoCruzado) {
-      turnosReemplazados.add(turnoCruzado);
-      const etiqueta = `Reunión general ${esOficinaEv ? 'Oficina' : e.conjunto}`;
-      let html;
-      if (esOficinaEv) {
-        html = `<div class="horw-chip horw-chip-trabajo" onclick="event.stopPropagation();abrirEditarEvento('${e.id}')">🏢 ${etiqueta}${modalidadTxt}</div>`;
-      } else {
-        const color = esVirtual ? colorClaro(cEv.c) : cEv.c;
-        html = `<div class="horw-chip" style="background:${color};color:${colorTextoContraste(color)}" onclick="event.stopPropagation();abrirEditarEvento('${e.id}')">🏘 ${etiqueta}${modalidadTxt}</div>`;
-      }
-      piezas.push({ hora: turnoCruzado.hora_entrada, html });
+    const etiquetaTipo = `${ICONO_TIPO_EVENTO[e.tipo] || '📌'} ${e.tipo}`;
+    let html;
+    if (cEv) {
+      const color = esVirtual ? colorClaro(cEv.c) : cEv.c;
+      html = `<div class="horw-chip" style="background:${color};color:${colorTextoContraste(color)}" onclick="event.stopPropagation();abrirEditarEvento('${e.id}')">${etiquetaTipo}${modalidadTxt}</div>`;
+    } else if (esOficinaEv) {
+      html = `<div class="horw-chip horw-chip-trabajo" onclick="event.stopPropagation();abrirEditarEvento('${e.id}')">${etiquetaTipo}${modalidadTxt}</div>`;
     } else {
-      const etiquetaTipo = `${ICONO_TIPO_EVENTO[e.tipo] || '📌'} ${e.tipo}`;
-      let html;
-      if (cEv) {
-        const color = esVirtual ? colorClaro(cEv.c) : cEv.c;
-        html = `<div class="horw-chip" style="background:${color};color:${colorTextoContraste(color)}" onclick="event.stopPropagation();abrirEditarEvento('${e.id}')">${etiquetaTipo}${modalidadTxt}</div>`;
-      } else if (esOficinaEv) {
-        html = `<div class="horw-chip horw-chip-trabajo" onclick="event.stopPropagation();abrirEditarEvento('${e.id}')">${etiquetaTipo}${modalidadTxt}</div>`;
-      } else {
-        html = `<div class="horw-chip" style="background:#e2e2e2;color:#444" onclick="event.stopPropagation();abrirEditarEvento('${e.id}')">${etiquetaTipo}${modalidadTxt}</div>`;
-      }
-      piezas.push({ hora: e.hora || '00:00', html });
+      html = `<div class="horw-chip" style="background:#e2e2e2;color:#444" onclick="event.stopPropagation();abrirEditarEvento('${e.id}')">${etiquetaTipo}${modalidadTxt}</div>`;
     }
+    piezas.push({ hora: e.hora || '00:00', html });
   });
 
   // La jornada libre por reunión de consejo (≥5pm) cancela TODA la mañana de ese día — sin
@@ -222,7 +214,7 @@ function celdaSemana(delegado, iso, dia) {
   // también se le elimina esa mañana).
   const esManana = t => parseInt((t.hora_entrada || '0').split(':')[0], 10) < 13;
   turnos.forEach(t => {
-    if (turnosReemplazados.has(t)) return;
+    if (turnosOcultos.has(t)) return;
     if (ausencia && ausencia.tipo === 'compensatorio' && esManana(t)) {
       piezas.push({ hora: t.hora_entrada, html: `<div class="horw-chip horw-chip-compensatorio">🔄 Jornada libre</div>` });
       return;
@@ -285,10 +277,21 @@ function abrirDetalleDia(iso, delegadoFiltro) {
   document.getElementById('dia-detalle-titulo').textContent = `📅 ${capitalizar(dia)} ${fechaCortaDesdeIso(iso)}${delegadoFiltro ? ` — ${delegadoFiltro}` : ''}${festivo ? ` — 🎉 ${festivo.nombre}` : ''}`;
 
   // La jornada libre por reunión de consejo cancela cualquier turno de la MAÑANA (sin importar
-  // el conjunto); sábado libre y vacaciones bloquean el día completo.
+  // el conjunto); sábado libre y vacaciones bloquean el día completo. Cualquier evento que se
+  // cruce en horario con el turno (de cualquier tipo, mismo conjunto o no) también lo reemplaza
+  // — mismo criterio que la vista Semana (celdaSemana), para que no queden filas duplicadas
+  // mostrando a la vez "en atención" y "en reunión" al mismo tiempo.
   const esTurnoManana = t => parseInt((t.hora_entrada || '0').split(':')[0], 10) < 13;
-  function textoTurno(t, ausencia) {
+  function textoTurno(t, ausencia, eventosDelegado) {
     if (ausencia && ausencia.tipo === 'compensatorio' && esTurnoManana(t)) return '🔄 Jornada libre';
+    const eventoCruzado = (eventosDelegado || []).find(e => {
+      const eFin = e.horaFin || e.hora;
+      return e.hora && eFin && e.hora < t.hora_salida && eFin > t.hora_entrada;
+    });
+    if (eventoCruzado) {
+      const modTxt = eventoCruzado.modalidad === 'virtual' ? ' · Virtual' : eventoCruzado.modalidad === 'presencial' ? ' · Presencial' : '';
+      return `${ICONO_TIPO_EVENTO[eventoCruzado.tipo] || '📌'} ${eventoCruzado.titulo || eventoCruzado.tipo}${modTxt}`;
+    }
     return `${t.turno} ${t.hora_entrada ? horaAMPM(t.hora_entrada) : '?'} - ${t.hora_salida ? horaAMPM(t.hora_salida) : '?'}`;
   }
 
@@ -297,13 +300,14 @@ function abrirDetalleDia(iso, delegadoFiltro) {
     if (!delegado || delegado === '—') return '';
     const ausencia = ausenciaDeDelegadoEnFecha(delegado, iso);
     const turnos = turnosDelDelegadoEnDia(delegado, dia, iso).filter(h => h.conjunto === c.n);
+    const eventosDelegado = eventosDelDelegadoEnFecha(delegado, iso);
     let estado;
     if (festivo) {
       estado = `🎉 Festivo (${festivo.nombre})`;
     } else if (ausencia && (ausencia.tipo === 'sabado' || ausencia.tipo === 'vacaciones')) {
       estado = ausencia.tipo === 'sabado' ? '🌞 Libre (sábado libre)' : `🏖️ ${ausencia.detalle}`;
     } else if (turnos.length) {
-      estado = turnos.map(t => textoTurno(t, ausencia)).join(', ');
+      estado = turnos.map(t => textoTurno(t, ausencia, eventosDelegado)).join(', ');
     } else {
       estado = '— sin turno';
     }
@@ -317,10 +321,11 @@ function abrirDetalleDia(iso, delegadoFiltro) {
     const turnosOficina = turnosDelDelegadoEnDia(delegadoFiltro, dia, iso).filter(h => h.conjunto === NOMBRE_OFICINA);
     if (turnosOficina.length) {
       const ausencia = ausenciaDeDelegadoEnFecha(delegadoFiltro, iso);
+      const eventosDelegado = eventosDelDelegadoEnFecha(delegadoFiltro, iso);
       let estadoOficina;
       if (festivo) estadoOficina = `🎉 Festivo (${festivo.nombre})`;
       else if (ausencia && (ausencia.tipo === 'sabado' || ausencia.tipo === 'vacaciones')) estadoOficina = ausencia.tipo === 'sabado' ? '🌞 Libre (sábado libre)' : `🏖️ ${ausencia.detalle}`;
-      else estadoOficina = turnosOficina.map(t => textoTurno(t, ausencia)).join(', ');
+      else estadoOficina = turnosOficina.map(t => textoTurno(t, ausencia, eventosDelegado)).join(', ');
       filaOficina = `<tr><td style="font-size:10px">🏢 Oficina A&V</td><td style="font-size:10px">${delegadoFiltro}</td><td style="font-size:10px">${estadoOficina}</td></tr>`;
     }
   }
