@@ -147,8 +147,8 @@ function renderCeldaDia(dia, mesIdx, anio, porFecha, esHoy, porFechaAusencias) {
           if (esFinTramo) cls += ' franja-fin';
           return `<div class="${cls}" title="${a.delegado} — ${a.detalle}">${esInicioTramo ? `🏖️ ${a.delegado}` : ''}</div>`;
         }
-        const emoji = a.tipo === 'sabado' ? '🌞' : a.pendienteEleccion ? '⏳' : '🔄';
-        const etiqueta = a.tipo === 'sabado' ? 'Libre' : a.pendienteEleccion ? 'Jornada libre (por elegir)' : `Jornada libre${a.medioDia ? ` (${a.medioDia === 'manana' ? 'mañana' : 'tarde'})` : ''}`;
+        const emoji = a.tipo === 'sabado' ? '🌞' : '🔄';
+        const etiqueta = a.tipo === 'sabado' ? 'Libre' : 'Jornada libre';
         const cls = a.tipo === 'sabado' ? 'horw-chip-sabado' : 'horw-chip-compensatorio';
         return `
         <div class="cal-evento ${cls}" title="${a.delegado} — ${a.detalle}">

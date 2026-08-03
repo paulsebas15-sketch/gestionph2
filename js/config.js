@@ -98,6 +98,10 @@ const TIPOS_EVENTUAL = [
   'Pago', 'Proyecto/Asamblea', 'Reporte/PQR', 'Sugerencia', 'Trabajo'
 ];
 
+// Tipos de tarea interna del equipo A&V (distintos a los de conjuntos — A&V no tiene delegado
+// ni conjunto, es trabajo interno de la administradora)
+const TIPOS_AV = ['Administrativo', 'Comercial', 'Legal', 'Contable', 'Tecnología', 'Recursos Humanos', 'Otro'];
+
 // Días de plazo sugerido al crear tarea, según prioridad
 const PLAZO_SUGERIDO_DIAS = { 'Alta': 7, 'Media': 15, 'Baja': 30 };
 

@@ -2,65 +2,25 @@
 // GestiónPH v2.0
 // Depende de: config.js, datos.js, auth.js, ui.js, calendario.js (tipoConjunto, eventosVisibles)
 
-// ─── COMPENSATORIO POR REUNIÓN DE CONSEJO ───────────────────────
-// Solo Definitivos tienen reunión de consejo. El día siguiente a la reunión, el delegado no
-// trabaja el turno que le correspondía ese conjunto — se corre al próximo día de atención real
-// si el día siguiente no era uno de sus días en ese conjunto (fin de semana, día sin turno, etc.)
-function proximoDiaAtencionDespues(delegado, conjuntoNombre, fechaIso, maxDias = 14) {
-  let d = fechaIsoADate(fechaIso);
-  if (!d) return null;
-  for (let i = 0; i < maxDias; i++) {
-    d = new Date(d);
-    d.setDate(d.getDate() + 1);
-    const dia = nombreDiaSemana(d);
-    const iso = fechaDateAIso(d);
-    const turnos = turnosDelDelegadoEnDia(delegado, dia, iso).filter(h => h.conjunto === conjuntoNombre);
-    if (turnos.length) return { fecha: iso, turnos };
-  }
-  return null;
-}
+// ─── JORNADA LIBRE POR REUNIÓN DE CONSEJO ───────────────────────
+// Solo Definitivos tienen reunión de consejo. Regla del usuario: si la reunión empieza a las
+// 5pm o después (casi siempre es de noche), ESE MISMO día se le cancela el turno de la MAÑANA
+// al delegado en ese conjunto — la tarde sigue exactamente igual que su horario normal. Si la
+// reunión es antes de las 5pm, no se genera ninguna jornada libre (la jornada normal ya está
+// dentro de lo legal).
+const HORA_LIMITE_JORNADA_LIBRE = '17:00';
 
-// Compensatorio derivado de UN evento "Reunión de consejo" puntual (o null si no aplica).
-// Si el turno del delegado ahí es "Día completo" no hay medio turno obvio que copiar — en ese
-// caso el delegado elige mañana o tarde una sola vez (guardado en compensatorio_elecciones);
-// hasta que elija, queda "pendiente" y no se le bloquea ningún turno todavía.
 function compensatorioDeEvento(evento) {
   if (evento.tipo !== 'Reunión de consejo' || !evento.conjunto) return null;
   if (tipoConjunto(evento.conjunto) !== 'Definitivos') return null;
+  if (!evento.hora || evento.hora < HORA_LIMITE_JORNADA_LIBRE) return null;
   const c = conjuntoPorNombre(evento.conjunto);
   const delegado = c && c.del;
   if (!delegado || delegado === '—' || esMedioTiempo(delegado)) return null;
-  const prox = proximoDiaAtencionDespues(delegado, evento.conjunto, evento.fecha);
-  if (!prox) return null;
-  const esDiaCompleto = prox.turnos.some(t => t.hora_entrada === '8:00' && t.hora_salida === '17:00');
-  let pendienteEleccion = false;
-  let medioDia = null;
-  if (esDiaCompleto) {
-    const elegido = DATA.compensatorioElecciones.find(e => e.eventoId === evento.id && e.delegado === delegado);
-    if (elegido) medioDia = elegido.eleccion; else pendienteEleccion = true;
-  }
-  return {
-    delegado, conjunto: evento.conjunto, fecha: prox.fecha, turnos: prox.turnos, origenFecha: evento.fecha,
-    eventoId: evento.id, esDiaCompleto, pendienteEleccion, medioDia
-  };
-}
-
-function elegirJornadaLibre(eventoId, eleccion) {
-  const usuario = usuarioActual();
-  if (!usuario) return;
-  let e = DATA.compensatorioElecciones.find(x => x.eventoId === eventoId && x.delegado === usuario.n);
-  if (!e) { e = { eventoId, delegado: usuario.n, eleccion }; DATA.compensatorioElecciones.push(e); }
-  else e.eleccion = eleccion;
-  const idx = DATA.compensatorioElecciones.indexOf(e);
-  guardarLocal();
-  guardarCompensatorioEleccionEnSupabase(idx);
-  closeOv('modal-dia-detalle');
-  toast(`✓ Elegiste tomar tu jornada libre en la ${eleccion === 'manana' ? 'mañana' : 'tarde'}`);
-  renderCalendario();
+  return { delegado, conjunto: evento.conjunto, fecha: evento.fecha, origenFecha: evento.fecha, eventoId: evento.id, horaReunion: evento.hora };
 }
 
 // Todos los compensatorios calculados a partir de TODAS las reuniones de consejo registradas
-// (sin importar el mes de la reunión — el compensatorio puede caer en el mes siguiente)
 function todosLosCompensatorios() {
   return DATA.eventosCalendario
     .filter(e => e.tipo === 'Reunión de consejo')
@@ -76,13 +36,10 @@ function ausenciasDelMes(mes) {
     ausencias.push({ fecha: s.fecha, delegado: s.delegado, tipo: 'sabado', detalle: 'Sábado libre' });
   });
   todosLosCompensatorios().filter(c => mesDeFechaIso(c.fecha) === mes).forEach(c => {
-    const etiquetaMedio = c.medioDia ? ` (${c.medioDia === 'manana' ? 'mañana' : 'tarde'})` : '';
     ausencias.push({
       fecha: c.fecha, delegado: c.delegado, conjunto: c.conjunto, tipo: 'compensatorio',
-      eventoId: c.eventoId, pendienteEleccion: c.pendienteEleccion, medioDia: c.medioDia,
-      detalle: c.pendienteEleccion
-        ? `Jornada libre pendiente de elegir (mañana o tarde) — reunión de consejo ${fechaCortaDesdeIso(c.origenFecha)} en ${c.conjunto}`
-        : `Jornada libre${etiquetaMedio} (reunión de consejo ${fechaCortaDesdeIso(c.origenFecha)}) — ${c.turnos.map(t => t.turno).join('/')} en ${c.conjunto}`
+      eventoId: c.eventoId,
+      detalle: `Jornada libre en la mañana (reunión de consejo hoy a las ${horaAMPM(c.horaReunion)}) en ${c.conjunto}`
     });
   });
   DATA.vacaciones.filter(v => v.estado === 'aprobado').forEach(v => {
@@ -101,10 +58,14 @@ function ausenciasDelMes(mes) {
 
 // La ausencia de UN delegado en UNA fecha puntual, respetando el filtro de conjunto del header
 // (un sábado libre aplica a todos sus conjuntos; un compensatorio solo aplica al conjunto de esa reunión)
+// Sábado libre y vacaciones bloquean el día completo, sin importar el conjunto. La jornada
+// libre por reunión de consejo (compensatorio) también cancela TODA la mañana de la persona,
+// sin importar de qué conjunto sea cada turno — por eso ninguno de los 3 tipos se filtra por
+// CONJUNTO_SELECCIONADO acá; el "conjunto" que trae el compensatorio es solo informativo (cuál
+// reunión lo originó), no una restricción de a qué turno aplica.
 function ausenciaDeDelegadoEnFecha(delegado, iso) {
   const mes = mesDeFechaIso(iso);
-  return ausenciasDelMes(mes).find(a => a.delegado === delegado && a.fecha === iso &&
-    (!CONJUNTO_SELECCIONADO || CONJUNTO_SELECCIONADO === 'Todos' || !a.conjunto || a.conjunto === CONJUNTO_SELECCIONADO));
+  return ausenciasDelMes(mes).find(a => a.delegado === delegado && a.fecha === iso);
 }
 
 // ─── VISTA SEMANAL/MENSUAL — toggle y navegación ────────────────
@@ -255,12 +216,15 @@ function celdaSemana(delegado, iso, dia) {
     }
   });
 
+  // La jornada libre por reunión de consejo (≥5pm) cancela TODA la mañana de ese día — sin
+  // importar de qué conjunto sea ese turno de la mañana, no solo el de la reunión (regla del
+  // usuario: si esa noche hay reunión de Torres, y en la mañana trabajaba en Cañasgordas,
+  // también se le elimina esa mañana).
+  const esManana = t => parseInt((t.hora_entrada || '0').split(':')[0], 10) < 13;
   turnos.forEach(t => {
     if (turnosReemplazados.has(t)) return;
-    if (ausencia && ausencia.tipo === 'compensatorio' && ausencia.conjunto === t.conjunto) {
-      if (ausencia.pendienteEleccion) { piezas.push({ hora: t.hora_entrada, html: `<div class="horw-chip horw-chip-compensatorio">⏳ Elegir jornada libre</div>` }); return; }
-      const etiquetaMedio = ausencia.medioDia ? ` (${ausencia.medioDia === 'manana' ? 'mañana' : 'tarde'})` : '';
-      piezas.push({ hora: t.hora_entrada, html: `<div class="horw-chip horw-chip-compensatorio">🔄 Jornada libre${etiquetaMedio}</div>` });
+    if (ausencia && ausencia.tipo === 'compensatorio' && esManana(t)) {
+      piezas.push({ hora: t.hora_entrada, html: `<div class="horw-chip horw-chip-compensatorio">🔄 Jornada libre</div>` });
       return;
     }
     piezas.push({ hora: t.hora_entrada, html: renderChipTurno(t) });
@@ -320,6 +284,14 @@ function abrirDetalleDia(iso, delegadoFiltro) {
   const festivo = festivoDeFecha(iso);
   document.getElementById('dia-detalle-titulo').textContent = `📅 ${capitalizar(dia)} ${fechaCortaDesdeIso(iso)}${delegadoFiltro ? ` — ${delegadoFiltro}` : ''}${festivo ? ` — 🎉 ${festivo.nombre}` : ''}`;
 
+  // La jornada libre por reunión de consejo cancela cualquier turno de la MAÑANA (sin importar
+  // el conjunto); sábado libre y vacaciones bloquean el día completo.
+  const esTurnoManana = t => parseInt((t.hora_entrada || '0').split(':')[0], 10) < 13;
+  function textoTurno(t, ausencia) {
+    if (ausencia && ausencia.tipo === 'compensatorio' && esTurnoManana(t)) return '🔄 Jornada libre';
+    return `${t.turno} ${t.hora_entrada ? horaAMPM(t.hora_entrada) : '?'} - ${t.hora_salida ? horaAMPM(t.hora_salida) : '?'}`;
+  }
+
   const filasHorario = conjuntosParaVistaHorarios().filter(c => !delegadoFiltro || c.del === delegadoFiltro).map(c => {
     const delegado = c.del;
     if (!delegado || delegado === '—') return '';
@@ -328,10 +300,10 @@ function abrirDetalleDia(iso, delegadoFiltro) {
     let estado;
     if (festivo) {
       estado = `🎉 Festivo (${festivo.nombre})`;
-    } else if (ausencia && (!ausencia.conjunto || ausencia.conjunto === c.n)) {
-      estado = ausencia.tipo === 'sabado' ? '🌞 Libre (sábado libre)' : ausencia.tipo === 'vacaciones' ? `🏖️ ${ausencia.detalle}` : `🔄 ${ausencia.detalle}`;
+    } else if (ausencia && (ausencia.tipo === 'sabado' || ausencia.tipo === 'vacaciones')) {
+      estado = ausencia.tipo === 'sabado' ? '🌞 Libre (sábado libre)' : `🏖️ ${ausencia.detalle}`;
     } else if (turnos.length) {
-      estado = turnos.map(t => `${t.turno} ${t.hora_entrada ? horaAMPM(t.hora_entrada) : '?'} - ${t.hora_salida ? horaAMPM(t.hora_salida) : '?'}`).join(', ');
+      estado = turnos.map(t => textoTurno(t, ausencia)).join(', ');
     } else {
       estado = '— sin turno';
     }
@@ -345,14 +317,10 @@ function abrirDetalleDia(iso, delegadoFiltro) {
     const turnosOficina = turnosDelDelegadoEnDia(delegadoFiltro, dia, iso).filter(h => h.conjunto === NOMBRE_OFICINA);
     if (turnosOficina.length) {
       const ausencia = ausenciaDeDelegadoEnFecha(delegadoFiltro, iso);
-      // El compensatorio (jornada libre) es específico de UN conjunto — solo se aplica a la fila
-      // de Oficina si esa fue la fecha/conjunto puntual afectado, no a cualquier compensatorio
-      // que tenga el delegado ese día en otro conjunto (sábado/vacaciones sí bloquean todo el día)
-      const ausenciaAplica = ausencia && (ausencia.tipo !== 'compensatorio' || ausencia.conjunto === NOMBRE_OFICINA);
       let estadoOficina;
       if (festivo) estadoOficina = `🎉 Festivo (${festivo.nombre})`;
-      else if (ausenciaAplica) estadoOficina = ausencia.tipo === 'sabado' ? '🌞 Libre (sábado libre)' : ausencia.tipo === 'vacaciones' ? `🏖️ ${ausencia.detalle}` : `🔄 ${ausencia.detalle}`;
-      else estadoOficina = turnosOficina.map(t => `${t.turno} ${t.hora_entrada ? horaAMPM(t.hora_entrada) : '?'} - ${t.hora_salida ? horaAMPM(t.hora_salida) : '?'}`).join(', ');
+      else if (ausencia && (ausencia.tipo === 'sabado' || ausencia.tipo === 'vacaciones')) estadoOficina = ausencia.tipo === 'sabado' ? '🌞 Libre (sábado libre)' : `🏖️ ${ausencia.detalle}`;
+      else estadoOficina = turnosOficina.map(t => textoTurno(t, ausencia)).join(', ');
       filaOficina = `<tr><td style="font-size:10px">🏢 Oficina A&V</td><td style="font-size:10px">${delegadoFiltro}</td><td style="font-size:10px">${estadoOficina}</td></tr>`;
     }
   }
@@ -372,25 +340,11 @@ function abrirDetalleDia(iso, delegadoFiltro) {
   const esSabado = dia === 'sabado';
   const puedeSolicitarSabado = esSabado && usuario && !esStaff() && !esMedioTiempo(usuario.n);
 
-  // Si es su propia jornada libre por reunión de consejo y todavía no eligió mañana/tarde
-  // (turno "Día completo", sin medio turno obvio), se le ofrece elegir acá mismo
-  const ausenciaPropia = usuario && !esStaff() ? ausenciaDeDelegadoEnFecha(usuario.n, iso) : null;
-  const necesitaElegirJornada = ausenciaPropia && ausenciaPropia.tipo === 'compensatorio' && ausenciaPropia.pendienteEleccion;
-  const elegirJornadaHtml = necesitaElegirJornada ? `
-    <div style="background:#eaf3fb;border:1px solid #bcdaf0;border-radius:8px;padding:10px;margin-top:10px">
-      <div style="font-size:11px;font-weight:600;margin-bottom:6px">🔄 Tienes una jornada libre por reunión de consejo en ${ausenciaPropia.conjunto} — ¿la tomas en la mañana o en la tarde?</div>
-      <div style="display:flex;gap:8px">
-        <button class="btn btn-v btn-sm" style="flex:1" onclick="elegirJornadaLibre('${ausenciaPropia.eventoId}','manana')">🌅 Mañana</button>
-        <button class="btn btn-v btn-sm" style="flex:1" onclick="elegirJornadaLibre('${ausenciaPropia.eventoId}','tarde')">🌇 Tarde</button>
-      </div>
-    </div>` : '';
-
   document.getElementById('dia-detalle-contenido').innerHTML = `
     <table class="tbl">
       <thead><tr><th>Conjunto</th><th>Delegado</th><th>Estado</th></tr></thead>
       <tbody>${filasHorario || filaOficina ? filasHorario + filaOficina : '<tr><td colspan="3" style="font-size:10px;color:var(--txs);text-align:center;padding:8px">Sin conjuntos con delegado asignado</td></tr>'}</tbody>
     </table>
-    ${elegirJornadaHtml}
     <div class="section-title" style="margin-top:12px">Eventos del día</div>
     ${eventosHtml}
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">

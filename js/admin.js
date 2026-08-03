@@ -32,6 +32,7 @@ function renderAdmin() {
   cont.innerHTML = `
     <div class="ibox">⚙️ <strong>Panel de Administración</strong> — Solo gerencia. Gestiona accesos, conjuntos, perfiles y tareas.</div>
     ${renderAvisoFestivosDiciembre()}
+    ${renderAvisoContratosPorVencer()}
 
     <div class="card">
       <div class="section-title">📊 Uso de almacenamiento</div>
@@ -304,6 +305,29 @@ function asignarDelegadoAConjunto(conjuntoNombre, delegadoNombre) {
   }
 }
 
+// Aviso de contratos a término fijo que vencen dentro de 30 días (o ya vencidos) — solo mira
+// usuarios con fecha_vencimiento_contrato cargada, los de contrato indefinido no aparecen acá.
+function renderAvisoContratosPorVencer() {
+  const hoy = new Date();
+  hoy.setHours(0, 0, 0, 0);
+  const limite = new Date(hoy);
+  limite.setDate(limite.getDate() + 30);
+  const porVencer = DATA.usuarios
+    .filter(u => u.fechaVencimientoContrato)
+    .map(u => ({ u, fecha: fechaIsoADate(u.fechaVencimientoContrato) }))
+    .filter(x => x.fecha && x.fecha <= limite)
+    .sort((a, b) => a.fecha - b.fecha);
+  if (!porVencer.length) return '';
+  return `
+    <div class="ibox" style="background:#fdecea;border-color:#e6a19a">
+      ⚠️ <strong>Contratos por vencer</strong>
+      ${porVencer.map(x => {
+        const vencido = x.fecha < hoy;
+        return `<div style="font-size:11px;margin-top:4px">${vencido ? '🔴' : '🟠'} ${x.u.n} — ${vencido ? 'venció el' : 'vence el'} ${fechaCortaDesdeIso(x.u.fechaVencimientoContrato)}</div>`;
+      }).join('')}
+    </div>`;
+}
+
 // ─── USUARIOS ─────────────────────────────────────────────────
 function renderFilasUsuarios() {
   return DATA.usuarios.map((u, idx) => {
@@ -338,6 +362,7 @@ function abrirNuevoUsuario() {
   document.getElementById('usr-activo').value = 'true';
   document.getElementById('usr-fecha-ingreso').value = '';
   document.getElementById('usr-medio-tiempo').checked = false;
+  document.getElementById('usr-fecha-vencimiento-contrato').value = '';
   document.getElementById('usr-conjuntos-wrap').classList.add('oculto');
   openOv('modal-usuario');
 }
@@ -360,6 +385,7 @@ function abrirEditarUsuario(idx) {
   document.getElementById('usr-activo').value = String(activo);
   document.getElementById('usr-fecha-ingreso').value = u.fechaIngreso || '';
   document.getElementById('usr-medio-tiempo').checked = !!u.medioTiempo;
+  document.getElementById('usr-fecha-vencimiento-contrato').value = u.fechaVencimientoContrato || '';
   document.getElementById('usr-conjuntos-wrap').classList.remove('oculto');
   document.getElementById('usr-conjuntos-lista').textContent = (u.conjuntos && u.conjuntos.length) ? u.conjuntos.join(', ') : 'Sin conjuntos asignados';
   openOv('modal-usuario');
@@ -376,12 +402,13 @@ function guardarUsuario() {
   const activo = document.getElementById('usr-activo').value === 'true';
   const fechaIngreso = document.getElementById('usr-fecha-ingreso').value || null;
   const medioTiempo = document.getElementById('usr-medio-tiempo').checked;
+  const fechaVencimientoContrato = document.getElementById('usr-fecha-vencimiento-contrato').value || null;
 
   const editIdx = parseInt(document.getElementById('usr-edit-idx').value, 10);
   let idxGuardado;
   if (editIdx >= 0) {
     const u = DATA.usuarios[editIdx];
-    Object.assign(u, { n: nombre, rol, cargo, equipo, fechaIngreso, medioTiempo });
+    Object.assign(u, { n: nombre, rol, cargo, equipo, fechaIngreso, medioTiempo, fechaVencimientoContrato });
     const cedulaExistente = cedulaPorIdxUsuario(editIdx);
     if (cedulaExistente) DATA.cedulas[cedulaExistente].activo = activo;
     idxGuardado = editIdx;
@@ -389,7 +416,7 @@ function guardarUsuario() {
   } else {
     if (DATA.cedulas[cedula]) { toast('Esa cédula ya está registrada'); return; }
     idxGuardado = DATA.usuarios.length;
-    DATA.usuarios.push({ n: nombre, rol, conjuntos: [], cargo, equipo, fechaIngreso, medioTiempo, av: iniciales(nombre), c: '#4a7c59', ra: nombre.split(' ')[0].toLowerCase() });
+    DATA.usuarios.push({ n: nombre, rol, conjuntos: [], cargo, equipo, fechaIngreso, medioTiempo, fechaVencimientoContrato, av: iniciales(nombre), c: '#4a7c59', ra: nombre.split(' ')[0].toLowerCase() });
     DATA.cedulas[cedula] = { idx: idxGuardado, rol, activo };
     toast('✓ Usuario creado');
   }

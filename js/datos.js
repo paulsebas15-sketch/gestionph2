@@ -17,8 +17,7 @@ const DATA = {
   horariosDelegados: [],
   sabadosLibres: [],
   festivos: [],
-  vacaciones: [],
-  compensatorioElecciones: []
+  vacaciones: []
 };
 
 let ESTADO = {};       // ESTADO[conjunto][mes][tareaIdx][slotIdx] = { done, ts, tsManual, foto, undoneAt }
@@ -260,8 +259,7 @@ function buildSnapshot() {
     horariosDelegados: DATA.horariosDelegados,
     sabadosLibres: DATA.sabadosLibres,
     festivos: DATA.festivos,
-    vacaciones: DATA.vacaciones,
-    compensatorioElecciones: DATA.compensatorioElecciones
+    vacaciones: DATA.vacaciones
   };
 }
 
@@ -281,7 +279,6 @@ function aplicarSnapshotDirecto(snap) {
   DATA.sabadosLibres = snap.sabadosLibres || [];
   DATA.festivos = snap.festivos || [];
   DATA.vacaciones = snap.vacaciones || [];
-  DATA.compensatorioElecciones = snap.compensatorioElecciones || [];
   REC_COMS = snap.recComs || {};
   EVAL_MANUAL = snap.evalManual || {};
   FECHAS_LIMITE_REC = snap.fechasLimiteRec || {};
