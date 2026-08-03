@@ -21,8 +21,9 @@ const ICONO_TIPO_EVENTO = {
 
 // ─── VISIBILIDAD ────────────────────────────────────────────────
 // El selector de conjunto del header también filtra Calendario: con un conjunto específico
-// elegido solo se ven sus eventos (las Capacitaciones, al ser transversales sin conjunto,
-// siempre se muestran si el usuario participa, sin importar el filtro del header).
+// elegido solo se ven sus eventos (los tipos masivos —Capacitación/Reuniones masivas—, al ser
+// transversales sin un conjunto único, siempre se muestran si el usuario participa, sin
+// importar el filtro del header).
 function eventosVisibles() {
   let lista;
   if (esStaff()) {
@@ -32,11 +33,11 @@ function eventosVisibles() {
     const conjs = (usuario && usuario.conjuntos) || [];
     lista = DATA.eventosCalendario.filter(e =>
       (e.conjunto && conjs.includes(e.conjunto)) ||
-      (e.tipo === 'Capacitación' && (e.participantes || []).includes(usuario.n))
+      (TIPOS_EVENTO_MASIVO.includes(e.tipo) && (e.participantes || []).includes(usuario.n))
     );
   }
   if (CONJUNTO_SELECCIONADO && CONJUNTO_SELECCIONADO !== 'Todos') {
-    lista = lista.filter(e => e.conjunto === CONJUNTO_SELECCIONADO || e.tipo === 'Capacitación');
+    lista = lista.filter(e => e.conjunto === CONJUNTO_SELECCIONADO || TIPOS_EVENTO_MASIVO.includes(e.tipo));
   }
   return lista;
 }

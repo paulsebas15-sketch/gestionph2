@@ -52,7 +52,7 @@ function renderResumenHoyDelegado() {
   const ausencia = ausenciaDeDelegadoEnFecha(usuario.n, hoyIso);
   const turnos = turnosDelDelegadoEnDia(usuario.n, dia, hoyIso);
   const eventosHoy = DATA.eventosCalendario.filter(e =>
-    e.fecha === hoyIso && ((e.conjunto && conjs.includes(e.conjunto)) || (e.tipo === 'Capacitación' && (e.participantes || []).includes(usuario.n)))
+    e.fecha === hoyIso && ((e.conjunto && conjs.includes(e.conjunto)) || (TIPOS_EVENTO_MASIVO.includes(e.tipo) && (e.participantes || []).includes(usuario.n)))
   );
 
   let estadoTurno;
@@ -150,11 +150,11 @@ function renderPendientesDelegado(mes) {
 
 // Eventos del Calendario (todos los tipos) que aún no pasan y caen dentro de lo que resta del
 // mes actual (por fecha real de hoy, no el mes elegido en el header) — mismo criterio de
-// visibilidad para delegado que usa Calendario: sus conjuntos + capacitaciones donde participe
+// visibilidad para delegado que usa Calendario: sus conjuntos + tipos masivos donde participe
 function eventosProximosParaAviso(usuario, conjs) {
   const eventos = DATA.eventosCalendario.filter(e =>
     (e.conjunto && conjs.includes(e.conjunto)) ||
-    (e.tipo === 'Capacitación' && (e.participantes || []).includes(usuario.n))
+    (TIPOS_EVENTO_MASIVO.includes(e.tipo) && (e.participantes || []).includes(usuario.n))
   );
   const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
   const manana = new Date(hoy); manana.setDate(hoy.getDate() + 1);
