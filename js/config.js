@@ -222,6 +222,15 @@ function fechaDateAIso(date) {
   return `${y}-${m}-${d}`;
 }
 
+// "YYYY-MM-DD" + 1 año, misma fecha del año siguiente (usado para pre-llenar el primer
+// vencimiento de contrato a término fijo a partir de la fecha de ingreso)
+function fechaIsoMasUnAnio(iso) {
+  const d = fechaIsoADate(iso);
+  if (!d) return null;
+  d.setFullYear(d.getFullYear() + 1);
+  return fechaDateAIso(d);
+}
+
 function fechaCortaDesdeDate(date) {
   const d = String(date.getDate()).padStart(2, '0');
   const m = String(date.getMonth() + 1).padStart(2, '0');

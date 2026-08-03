@@ -348,6 +348,17 @@ function cedulaPorIdxUsuario(idx) {
   return Object.keys(DATA.cedulas).find(c => DATA.cedulas[c].idx === idx);
 }
 
+// Pre-llena vencimiento de contrato con fecha_ingreso + 1 año, SOLO si el campo está vacío —
+// así no se pisa una fecha de renovación que el admin ya haya escrito a mano (cada renovación
+// pacta su propia vigencia, no siempre es exactamente 1 año desde el ingreso original).
+function autorrellenarVencimientoContrato() {
+  const campoVencimiento = document.getElementById('usr-fecha-vencimiento-contrato');
+  if (campoVencimiento.value) return;
+  const ingreso = document.getElementById('usr-fecha-ingreso').value;
+  if (!ingreso) return;
+  campoVencimiento.value = fechaIsoMasUnAnio(ingreso);
+}
+
 function abrirNuevoUsuario() {
   document.getElementById('usr-modal-titulo').textContent = '➕ Nuevo usuario';
   document.getElementById('usr-btn-guardar').textContent = '✓ Crear';
