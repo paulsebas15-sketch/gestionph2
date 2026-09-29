@@ -189,7 +189,7 @@ function poblarFormularioEvento() {
     <label style="font-size:10px;background:white;padding:4px 8px;border-radius:6px;border:1px solid var(--brd);cursor:pointer">
       <input type="checkbox" value="${n}"> ${n}
     </label>`).join('');
-  document.getElementById('ev-participantes').innerHTML = DATA.usuarios.map(u => `
+  document.getElementById('ev-participantes').innerHTML = DATA.usuarios.filter(usuarioEstaActivo).map(u => `
     <label style="font-size:10px;background:white;padding:4px 8px;border-radius:6px;border:1px solid var(--brd);cursor:pointer">
       <input type="checkbox" value="${u.n}"> ${u.n}
     </label>`).join('');

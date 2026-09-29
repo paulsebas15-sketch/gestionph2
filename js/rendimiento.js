@@ -4,7 +4,7 @@
 // Fusionado dentro de Dashboard/"Resumen" (ya no es pestaña propia) — ver dashboard.js
 
 function renderSeccionRendimiento(mes) {
-  const delegados = DATA.usuarios.filter(u => u.rol === 'delegado' && (esStaff() || u.n === (usuarioActual() && usuarioActual().n)));
+  const delegados = delegadosActivos().filter(u => esStaff() || u.n === (usuarioActual() && usuarioActual().n));
   return `
     <div class="card">
       <div class="card-title">🏆 Rendimiento por delegado — ${mes}</div>

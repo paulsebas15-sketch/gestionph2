@@ -316,7 +316,7 @@ function abrirEditarEventual() {
     document.getElementById('editar-eve-tipo').innerHTML = TIPOS_EVENTUAL.map(tp => `<option ${tp === t.tipo ? 'selected' : ''}>${tp}</option>`).join('');
     document.getElementById('editar-eve-prioridad').innerHTML = PRIORIDADES.map(p => `<option ${p === t.pri ? 'selected' : ''}>${p}</option>`).join('');
     document.getElementById('editar-eve-conjunto').innerHTML = todosLosConjuntos().map(c => `<option ${c.n === t.conj ? 'selected' : ''}>${c.n}</option>`).join('');
-    document.getElementById('editar-eve-encargado').innerHTML = DATA.usuarios.map(u => `<option ${u.n === t.enc ? 'selected' : ''}>${u.n}</option>`).join('');
+    document.getElementById('editar-eve-encargado').innerHTML = DATA.usuarios.filter(u => usuarioEstaActivo(u) || u.n === t.enc).map(u => `<option ${u.n === t.enc ? 'selected' : ''}>${u.n}</option>`).join('');
     document.getElementById('editar-eve-fecha').value = fechaCortaAIso(t.vence);
   }
   closeOv('modal-detalle-eve');

@@ -79,6 +79,45 @@ function esMedioTiempo(nombreDelegado) {
   return !!(u && u.medioTiempo);
 }
 
+// Activo/inactivo vive en DATA.cedulas (lo que se edita en Admin); u.activo es solo el valor
+// que vino de Supabase en la carga inicial, se usa como respaldo si no hay cédula enlazada.
+function usuarioEstaActivo(u) {
+  if (!u) return false;
+  const idx = DATA.usuarios.indexOf(u);
+  const cedula = Object.keys(DATA.cedulas || {}).find(c => DATA.cedulas[c].idx === idx);
+  if (cedula) return DATA.cedulas[cedula].activo !== false;
+  return u.activo !== false;
+}
+
+// Cuenta como delegado para la operación (calendario, horarios, sábados, vacaciones,
+// rendimiento): los de rol Delegado, y los Staff marcados con "También es delegado".
+function esDelegadoOperativo(u) {
+  return !!u && (u.rol === 'delegado' || !!u.tambienDelegado);
+}
+
+// Delegados a listar en selects, filas del calendario, sábados masivos, etc. — los inactivos
+// (desactivados en Admin) ya no aparecen, pero su historial se conserva.
+function delegadosActivos() {
+  return DATA.usuarios.filter(u => esDelegadoOperativo(u) && usuarioEstaActivo(u));
+}
+
+function esDelegadoActivoPorNombre(nombre) {
+  const u = usuarioPorNombre(nombre);
+  return esDelegadoOperativo(u) && usuarioEstaActivo(u);
+}
+
+// <option>s de delegados activos para un select. Si el valor actual es alguien inactivo (ej. un
+// horario que todavía está a nombre del delegado anterior), se agrega marcado "(inactivo)" para
+// que el select no cambie de persona en silencio al abrirlo.
+function opcionesDelegadoConActual(actual) {
+  const activos = delegadosActivos();
+  const opciones = activos.map(u => `<option value="${u.n}" ${u.n === actual ? 'selected' : ''}>${u.n}</option>`);
+  if (actual && actual !== '—' && !activos.some(u => u.n === actual)) {
+    opciones.unshift(`<option value="${actual}" selected>${actual} (inactivo)</option>`);
+  }
+  return opciones.join('');
+}
+
 // Años completos cumplidos desde la fecha de ingreso hasta hoy — cada uno otorga 15 días
 // hábiles de vacaciones de una sola vez (regla elegida: "bloques al cumplir año", no proporcional)
 function aniosCumplidos(fechaIngresoIso, hasta = new Date()) {

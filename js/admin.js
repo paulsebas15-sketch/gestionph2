@@ -162,9 +162,7 @@ function renderFilasConjuntos() {
 
 function poblarSelectDelegados(delegadoActual) {
   const sel = document.getElementById('conj-delegado');
-  const delegados = DATA.usuarios.filter(u => u.rol === 'delegado');
-  sel.innerHTML = '<option value="">— Sin asignar —</option>' +
-    delegados.map(u => `<option ${u.n === delegadoActual ? 'selected' : ''}>${u.n}</option>`).join('');
+  sel.innerHTML = '<option value="">— Sin asignar —</option>' + opcionesDelegadoConActual(delegadoActual);
 }
 
 function poblarSwatchesColor(colorActual) {
@@ -240,6 +238,7 @@ function guardarConjunto() {
     }
     asignarDelegadoAConjunto(nuevoNombre, delegado);
     sincronizarAsignacionConjunto(nuevoNombre, delegadoAnterior, delegado); // guardado individual: solo las 2 filas que cambiaron en delegado_conjuntos
+    reasignarHorariosDeConjunto([nombreActual, nuevoNombre], delegado);
     guardarLocal();
     guardarConjuntoEnSupabase(nombreActual, nuevoNombre, c, tipo === 'def' ? 'Definitivos' : 'Provisional (A&V)'); // guardado individual: solo esta fila del conjunto
     toast('✓ Conjunto actualizado');
@@ -305,6 +304,27 @@ function asignarDelegadoAConjunto(conjuntoNombre, delegadoNombre) {
   }
 }
 
+// Las filas de horario (Admin → Horarios) son las que arman el calendario semanal, y antes
+// quedaban a nombre del delegado anterior al cambiar el delegado del conjunto (el nuevo salía
+// sin turnos y el anterior seguía apareciendo). Al guardar el conjunto se ofrece pasarlas al
+// delegado nuevo, con los mismos días y horas. Revisa también filas desalineadas de antes, así
+// que basta con volver a guardar un conjunto para corregir un reemplazo ya hecho.
+function reasignarHorariosDeConjunto(nombresConjunto, delegadoNuevo) {
+  if (!delegadoNuevo || delegadoNuevo === '—') return;
+  const pendientes = DATA.horariosDelegados
+    .map((h, idx) => ({ h, idx }))
+    .filter(({ h }) => !h.deleted && nombresConjunto.includes(h.conjunto) && h.delegado !== delegadoNuevo);
+  if (!pendientes.length) return;
+  const anteriores = [...new Set(pendientes.map(({ h }) => h.delegado || '(sin nombre)'))].join(', ');
+  const msg = `Hay ${pendientes.length} horario(s) de este conjunto a nombre de ${anteriores}.\n\n¿Pasarlos a ${delegadoNuevo}? (mismos días y horas)`;
+  if (!confirm(msg)) return;
+  pendientes.forEach(({ h, idx }) => {
+    h.delegado = delegadoNuevo;
+    guardarHorarioEnSupabase(idx); // guardado individual: solo esta fila de horario
+  });
+  toast(`✓ ${pendientes.length} horario(s) pasados a ${delegadoNuevo}`);
+}
+
 // Aviso de contratos a término fijo que vencen dentro de 30 días (o ya vencidos) — solo mira
 // usuarios con fecha_vencimiento_contrato cargada, los de contrato indefinido no aparecen acá.
 function renderAvisoContratosPorVencer() {
@@ -337,7 +357,7 @@ function renderFilasUsuarios() {
       <tr>
         <td style="font-size:10px">${u.n}</td>
         <td style="font-size:9px;color:var(--txs)">${u.cargo || '—'}</td>
-        <td style="font-size:9px">${u.rol === 'staff' ? 'Staff' : 'Delegado'}</td>
+        <td style="font-size:9px">${u.rol === 'staff' ? (u.tambienDelegado ? 'Staff + Delegado' : 'Staff') : 'Delegado'}</td>
         <td><span style="font-size:9px;color:${activo ? 'var(--vm)' : 'var(--rj)'}">${activo ? '✅ Activo' : '⛔ Inactivo'}</span></td>
         <td><button class="btn btn-sm btn-g" style="font-size:9px;padding:2px 6px" onclick="abrirEditarUsuario(${idx})">✏️</button></td>
       </tr>`;
@@ -363,6 +383,7 @@ function abrirNuevoUsuario() {
   document.getElementById('usr-modal-titulo').textContent = '➕ Nuevo usuario';
   document.getElementById('usr-btn-guardar').textContent = '✓ Crear';
   document.getElementById('usr-btn-eliminar').classList.add('oculto');
+  document.getElementById('usr-btn-borrar-definitivo').classList.add('oculto');
   document.getElementById('usr-edit-idx').value = '-1';
   document.getElementById('usr-nombre').value = '';
   document.getElementById('usr-cedula').value = '';
@@ -374,8 +395,16 @@ function abrirNuevoUsuario() {
   document.getElementById('usr-fecha-ingreso').value = '';
   document.getElementById('usr-medio-tiempo').checked = false;
   document.getElementById('usr-fecha-vencimiento-contrato').value = '';
+  document.getElementById('usr-tambien-delegado').checked = false;
+  actualizarVisibilidadTambienDelegado();
   document.getElementById('usr-conjuntos-wrap').classList.add('oculto');
   openOv('modal-usuario');
+}
+
+// "También es delegado" solo aplica a Staff (un Delegado ya lo es)
+function actualizarVisibilidadTambienDelegado() {
+  const esStaffSel = document.getElementById('usr-rol').value === 'staff';
+  document.getElementById('usr-tambien-delegado-wrap').classList.toggle('oculto', !esStaffSel);
 }
 
 function abrirEditarUsuario(idx) {
@@ -385,7 +414,9 @@ function abrirEditarUsuario(idx) {
   const activo = cedula ? DATA.cedulas[cedula].activo !== false : true;
   document.getElementById('usr-modal-titulo').textContent = '✏️ Editar usuario';
   document.getElementById('usr-btn-guardar').textContent = '✓ Guardar cambios';
-  document.getElementById('usr-btn-eliminar').classList.remove('oculto');
+  // Desactivar para los activos; Borrar definitivamente solo una vez que ya está inactivo
+  document.getElementById('usr-btn-eliminar').classList.toggle('oculto', !activo);
+  document.getElementById('usr-btn-borrar-definitivo').classList.toggle('oculto', activo);
   document.getElementById('usr-edit-idx').value = String(idx);
   document.getElementById('usr-nombre').value = u.n;
   document.getElementById('usr-cedula').value = cedula || '';
@@ -397,6 +428,8 @@ function abrirEditarUsuario(idx) {
   document.getElementById('usr-fecha-ingreso').value = u.fechaIngreso || '';
   document.getElementById('usr-medio-tiempo').checked = !!u.medioTiempo;
   document.getElementById('usr-fecha-vencimiento-contrato').value = u.fechaVencimientoContrato || '';
+  document.getElementById('usr-tambien-delegado').checked = !!u.tambienDelegado;
+  actualizarVisibilidadTambienDelegado();
   document.getElementById('usr-conjuntos-wrap').classList.remove('oculto');
   document.getElementById('usr-conjuntos-lista').textContent = (u.conjuntos && u.conjuntos.length) ? u.conjuntos.join(', ') : 'Sin conjuntos asignados';
   openOv('modal-usuario');
@@ -414,12 +447,13 @@ function guardarUsuario() {
   const fechaIngreso = document.getElementById('usr-fecha-ingreso').value || null;
   const medioTiempo = document.getElementById('usr-medio-tiempo').checked;
   const fechaVencimientoContrato = document.getElementById('usr-fecha-vencimiento-contrato').value || null;
+  const tambienDelegado = rol === 'staff' && document.getElementById('usr-tambien-delegado').checked;
 
   const editIdx = parseInt(document.getElementById('usr-edit-idx').value, 10);
   let idxGuardado;
   if (editIdx >= 0) {
     const u = DATA.usuarios[editIdx];
-    Object.assign(u, { n: nombre, rol, cargo, equipo, fechaIngreso, medioTiempo, fechaVencimientoContrato });
+    Object.assign(u, { n: nombre, rol, cargo, equipo, fechaIngreso, medioTiempo, fechaVencimientoContrato, tambienDelegado });
     const cedulaExistente = cedulaPorIdxUsuario(editIdx);
     if (cedulaExistente) DATA.cedulas[cedulaExistente].activo = activo;
     idxGuardado = editIdx;
@@ -427,7 +461,7 @@ function guardarUsuario() {
   } else {
     if (DATA.cedulas[cedula]) { toast('Esa cédula ya está registrada'); return; }
     idxGuardado = DATA.usuarios.length;
-    DATA.usuarios.push({ n: nombre, rol, conjuntos: [], cargo, equipo, fechaIngreso, medioTiempo, fechaVencimientoContrato, av: iniciales(nombre), c: '#4a7c59', ra: nombre.split(' ')[0].toLowerCase() });
+    DATA.usuarios.push({ n: nombre, rol, conjuntos: [], cargo, equipo, fechaIngreso, medioTiempo, fechaVencimientoContrato, tambienDelegado, av: iniciales(nombre), c: '#4a7c59', ra: nombre.split(' ')[0].toLowerCase() });
     DATA.cedulas[cedula] = { idx: idxGuardado, rol, activo };
     toast('✓ Usuario creado');
   }
@@ -449,6 +483,64 @@ function eliminarUsuario() {
   programarGuardadoUsuario(editIdx); // guardado individual: solo este usuario, ningún otro se toca
   renderAdmin();
   toast('Usuario desactivado');
+}
+
+// Borrado real (solo para usuarios YA inactivos): elimina la fila del usuario en Supabase y, por
+// cascade, sus asignaciones en delegado_conjuntos. El historial (tareas, sábados, vacaciones,
+// evaluaciones) NO se toca — ahí el nombre queda como texto histórico. Los horarios de OTROS
+// delegados nunca se tocan; si al usuario le quedan filas de horario propias, se pregunta.
+async function borrarUsuarioDefinitivo() {
+  const editIdx = parseInt(document.getElementById('usr-edit-idx').value, 10);
+  const u = DATA.usuarios[editIdx];
+  if (!u) return;
+  if (usuarioEstaActivo(u)) { toast('Primero desactiva al usuario'); return; }
+  if (SESION_ACTUAL && SESION_ACTUAL.idx === editIdx) { toast('No puedes borrar tu propio usuario'); return; }
+
+  const conjuntosAun = todosLosConjuntos().filter(c => c.del === u.n).map(c => c.n);
+  if (conjuntosAun.length) {
+    toast(`⛔ ${u.n} aún es delegado de: ${conjuntosAun.join(', ')}. Reasigna esos conjuntos primero.`, 6000);
+    return;
+  }
+  if (!confirm(`¿Borrar DEFINITIVAMENTE a "${u.n}"?\n\nNo se puede deshacer. Su historial (tareas, sábados, evaluaciones) se conserva con su nombre.`)) return;
+
+  const horariosPropios = DATA.horariosDelegados
+    .map((h, idx) => ({ h, idx }))
+    .filter(({ h }) => !h.deleted && h.delegado === u.n);
+  let borrarHorarios = false;
+  if (horariosPropios.length) {
+    borrarHorarios = confirm(`A ${u.n} le quedan ${horariosPropios.length} horario(s) a su nombre (${[...new Set(horariosPropios.map(({ h }) => h.conjunto))].join(', ')}).\n\nAceptar = borrarlos también · Cancelar = conservarlos (no se mostrarán en el calendario)`);
+  }
+
+  const ok = await eliminarUsuarioEnSupabase(editIdx);
+  if (!ok) { toast('⛔ No se pudo borrar en Supabase. Intenta de nuevo.'); return; }
+
+  if (borrarHorarios) {
+    // de atrás hacia adelante para que los índices de las filas pendientes no se corran
+    for (const { idx } of horariosPropios.sort((a, b) => b.idx - a.idx)) {
+      await eliminarHorarioEnSupabase(idx);
+      DATA.horariosDelegados.splice(idx, 1);
+    }
+  }
+
+  quitarUsuarioLocal(editIdx);
+  guardarLocal();
+  closeOv('modal-usuario');
+  renderAdmin();
+  toast(`🗑 ${u.n} borrado definitivamente`);
+}
+
+// Saca al usuario del arreglo local y corre los índices de DATA.cedulas (y de la sesión actual)
+// que apuntaban a posiciones posteriores — el login usa cedula → idx dentro de DATA.usuarios.
+function quitarUsuarioLocal(idx) {
+  DATA.usuarios.splice(idx, 1);
+  Object.keys(DATA.cedulas).forEach(c => {
+    if (DATA.cedulas[c].idx === idx) delete DATA.cedulas[c];
+    else if (DATA.cedulas[c].idx > idx) DATA.cedulas[c].idx--;
+  });
+  if (SESION_ACTUAL && SESION_ACTUAL.idx > idx) {
+    SESION_ACTUAL.idx--;
+    localStorage.setItem(SESSION_KEY, JSON.stringify(SESION_ACTUAL));
+  }
 }
 
 // ─── TAREAS RECURRENTES (base) ─────────────────────────────────

@@ -166,7 +166,8 @@ async function cargarTodoDesdeSupabase() {
     n: u.nombre, rol: u.rol, cargo: u.cargo, equipo: u.equipo, av: u.avatar, c: u.color,
     conjuntos: conjPorUsuario[u.id] || [], activo: u.activo,
     fechaIngreso: u.fecha_ingreso || null, medioTiempo: !!u.medio_tiempo,
-    fechaVencimientoContrato: u.fecha_vencimiento_contrato || null, _supabaseId: u.id
+    fechaVencimientoContrato: u.fecha_vencimiento_contrato || null, tambienDelegado: !!u.tambien_delegado,
+    _supabaseId: u.id
   }));
   const cedulas = {};
   const cedActivos = {};
@@ -342,7 +343,8 @@ function filaUsuario(u, cedula, activo) {
     nombre: u.n, cedula, rol: u.rol, cargo: u.cargo || null, equipo: u.equipo || null,
     avatar: u.av || null, color: u.c || null, activo: activo !== false,
     fecha_ingreso: u.fechaIngreso || null, medio_tiempo: !!u.medioTiempo,
-    fecha_vencimiento_contrato: u.fechaVencimientoContrato || null
+    fecha_vencimiento_contrato: u.fechaVencimientoContrato || null,
+    tambien_delegado: !!u.tambienDelegado
   };
 }
 
@@ -379,6 +381,30 @@ function programarGuardadoUsuario(idx) {
   guardarLocal();
   clearTimeout(_usuarioTimers[idx]);
   _usuarioTimers[idx] = setTimeout(() => guardarUsuarioEnSupabase(idx), SAVE_DELAY);
+}
+
+// Borrado real de un usuario (solo Staff, desde Admin). delegado_conjuntos se borra solo por
+// el "on delete cascade". Antes de borrar se ejecutan de una vez los guardados de usuario que
+// estén pendientes en el debounce: van por índice, y al sacar al usuario del arreglo local los
+// índices posteriores se corren — un guardado atrasado terminaría escribiendo en otra persona.
+async function eliminarUsuarioEnSupabase(idx) {
+  if (!esStaff()) return false;
+  const u = DATA.usuarios[idx];
+  if (!u) return false;
+  const pendientes = Object.keys(_usuarioTimers).map(Number).filter(i => i !== idx);
+  Object.values(_usuarioTimers).forEach(t => clearTimeout(t));
+  _usuarioTimers = {};
+  await Promise.all(pendientes.map(i => guardarUsuarioEnSupabase(i)));
+  if (!u._supabaseId) return true; // nunca llegó a Supabase, basta con quitarlo localmente
+  // .select() para confirmar que sí se borró: si RLS lo bloquea, Supabase no da error, solo 0 filas
+  const { data, error } = await SB.from('usuarios').delete().eq('id', u._supabaseId).select('id');
+  if (error || !data || !data.length) {
+    console.error('Error borrando usuario en Supabase:', error ? error.message : 'ninguna fila borrada (¿permisos?)');
+    actualizarIndicadorSync('offline');
+    return false;
+  }
+  actualizarIndicadorSync('synced');
+  return true;
 }
 
 // Diff quirúrgico de la asignación delegado↔conjunto: solo borra la fila (delegadoAnterior,
@@ -888,7 +914,8 @@ async function restaurarBackupEnSupabase(snap) {
         ? { id: u._supabaseId, nombre: u.n, cedula, rol: u.rol, cargo: u.cargo || null, equipo: u.equipo || null,
             avatar: u.av || null, color: u.c || null, activo: snap.cedulas[cedula].activo !== false,
             fecha_ingreso: u.fechaIngreso || null, medio_tiempo: !!u.medioTiempo,
-            fecha_vencimiento_contrato: u.fechaVencimientoContrato || null }
+            fecha_vencimiento_contrato: u.fechaVencimientoContrato || null,
+            tambien_delegado: !!u.tambienDelegado }
         : null;
     }).filter(Boolean);
     if (usuariosRows.length) resultados.push(SB.from('usuarios').upsert(usuariosRows, { onConflict: 'id' }));

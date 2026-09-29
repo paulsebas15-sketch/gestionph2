@@ -129,7 +129,8 @@ function delegadosParaVistaSemana() {
     const usuario = usuarioActual();
     return usuario ? [usuario.n] : [];
   }
-  return [...new Set(DATA.horariosDelegados.filter(h => !h.deleted).map(h => h.delegado))].sort();
+  // Solo delegados activos: un inactivo (ej. reemplazado) no sale aunque le queden filas de horario
+  return [...new Set(DATA.horariosDelegados.filter(h => !h.deleted && esDelegadoActivoPorNombre(h.delegado)).map(h => h.delegado))].sort();
 }
 
 // Eventos de Calendario que aplican a ESTE delegado en ESTA fecha: los tipos con conjunto
@@ -343,7 +344,7 @@ function abrirDetalleDia(iso, delegadoFiltro) {
 
   const usuario = usuarioActual();
   const esSabado = dia === 'sabado';
-  const puedeSolicitarSabado = esSabado && usuario && !esStaff() && !esMedioTiempo(usuario.n);
+  const puedeSolicitarSabado = esSabado && usuario && sesionEsDelegadoOperativo() && !esMedioTiempo(usuario.n);
 
   document.getElementById('dia-detalle-contenido').innerHTML = `
     <table class="tbl">
@@ -500,7 +501,7 @@ function renderBotonSabadosMasivos() {
 function abrirSabadosMasivos() {
   if (!esStaff()) return;
   document.getElementById('sabmas-fecha').value = '';
-  const delegadosTC = DATA.usuarios.filter(u => u.rol === 'delegado' && !esMedioTiempo(u.n));
+  const delegadosTC = delegadosActivos().filter(u => !esMedioTiempo(u.n));
   document.getElementById('sabmas-delegados').innerHTML = delegadosTC.map(u => `
     <label style="font-size:10px;background:white;padding:4px 8px;border-radius:6px;border:1px solid var(--brd);cursor:pointer">
       <input type="checkbox" value="${u.n}"> ${u.n}
@@ -545,7 +546,7 @@ function confirmarSabadosMasivos() {
 
 function renderMisSabados() {
   const usuario = usuarioActual();
-  if (!usuario || esStaff() || esMedioTiempo(usuario.n)) return '';
+  if (!usuario || !sesionEsDelegadoOperativo() || esMedioTiempo(usuario.n)) return '';
   const mes = getMes();
   const mios = DATA.sabadosLibres
     .map((s, idx) => ({ ...s, idx }))
@@ -735,7 +736,7 @@ function renderColaAprobacionVacaciones() {
 // (contratados por prestación de servicios) no es una obligación legal, pero se ofrece igual.
 function renderMisVacaciones() {
   const usuario = usuarioActual();
-  if (!usuario || esStaff()) return '';
+  if (!usuario || !sesionEsDelegadoOperativo()) return '';
   const saldo = saldoVacaciones(usuario.n);
   const mias = DATA.vacaciones
     .map((v, idx) => ({ ...v, idx }))
@@ -759,7 +760,7 @@ function renderMisVacaciones() {
 // que tiene los 2 sábados libres al mes) y no recibe el compensatorio del día siguiente a una
 // reunión de consejo.
 function renderMedioTiempoAdmin() {
-  const delegados = DATA.usuarios.filter(u => u.rol === 'delegado');
+  const delegados = delegadosActivos();
   return `
     <div class="card">
       <div class="section-title">🕓 Delegados de medio tiempo</div>
@@ -817,7 +818,7 @@ function renderFilasHorarios() {
         </td>
         <td>
           <select class="form-input" style="font-size:9px;padding:3px 5px" onchange="editarCampoHorarioSelect(${idx},'delegado',this.value)">
-            ${DATA.usuarios.filter(u => u.rol === 'delegado').map(u => `<option ${u.n === h.delegado ? 'selected' : ''}>${u.n}</option>`).join('')}
+            ${opcionesDelegadoConActual(h.delegado)}
           </select>
         </td>
         <td>
@@ -901,7 +902,7 @@ function toggleDiaHorario(idx, diaKey, checked) {
 function agregarFilaHorario() {
   const conjuntoInicial = conjuntosDisponiblesHorario()[0] || '';
   const c = conjuntoPorNombre(conjuntoInicial);
-  const delegadoInicial = (c && c.del && c.del !== '—') ? c.del : ((DATA.usuarios.find(u => u.rol === 'delegado') || {}).n || '');
+  const delegadoInicial = (c && c.del && c.del !== '—') ? c.del : ((delegadosActivos()[0] || {}).n || '');
   DATA.horariosDelegados.push({ conjunto: conjuntoInicial, delegado: delegadoInicial, turno: TURNOS_PRESET[2].label, hora_entrada: TURNOS_PRESET[2].entrada, hora_salida: TURNOS_PRESET[2].salida, dias_atencion: '' });
   guardarLocal();
   renderAdmin();

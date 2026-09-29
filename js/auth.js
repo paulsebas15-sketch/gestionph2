@@ -76,6 +76,12 @@ function esDelegado() {
   return SESION_ACTUAL && SESION_ACTUAL.rol === 'delegado';
 }
 
+// La sesión actual opera como delegado (rol Delegado, o Staff con "También es delegado") —
+// para lo propio de un delegado: mis sábados, mis vacaciones, solicitar sábado.
+function sesionEsDelegadoOperativo() {
+  return esDelegadoOperativo(usuarioActual());
+}
+
 // Control de acceso por pestaña (tabla sección 5.3)
 // Validaciones es exclusivo de Staff/Admin (el delegado ya no la ve, ni siquiera para sus
 // propios conjuntos)
