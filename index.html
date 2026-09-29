@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>GestiónPH v2.0 — A&V Victoria Pineda</title>
-<link rel="stylesheet" href="css/estilos.css?v=20260803e">
+<link rel="stylesheet" href="css/estilos.css?v=20260803f">
 <!-- Supabase (datos + fotos) -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <!-- jsPDF para informes -->
@@ -382,7 +382,7 @@
         </div>
         <div class="form-group">
           <label class="form-label">Rol</label>
-          <select class="form-input" id="usr-rol">
+          <select class="form-input" id="usr-rol" onchange="actualizarVisibilidadTambienDelegado()">
             <option value="delegado">Delegado</option>
             <option value="staff">Staff</option>
           </select>
@@ -412,12 +412,17 @@
         </div>
         <div class="form-group">
           <label class="form-label">Fecha de ingreso</label>
-          <input class="form-input" type="date" id="usr-fecha-ingreso" oninput="autorrellenarVencimientoContrato()">
+          <input class="form-input" type="date" id="usr-fecha-ingreso" onchange="autorrellenarVencimientoContrato()">
         </div>
       </div>
       <div class="form-group">
         <label style="font-size:10px;display:flex;align-items:center;gap:6px;cursor:pointer">
           <input type="checkbox" id="usr-medio-tiempo"> Trabaja medio tiempo (sin sábados libres ni compensatorio de reunión)
+        </label>
+      </div>
+      <div class="form-group oculto" id="usr-tambien-delegado-wrap">
+        <label style="font-size:10px;display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="usr-tambien-delegado"> También es delegado (aparece en calendario, horarios, sábados, vacaciones y rendimiento como un delegado más, sin perder los permisos de Staff)
         </label>
       </div>
       <div class="form-group">
@@ -431,6 +436,7 @@
       </div>
       <div style="display:flex;gap:8px;margin-top:4px">
         <button class="btn btn-r btn-sm oculto" id="usr-btn-eliminar" onclick="eliminarUsuario()">⛔ Desactivar</button>
+        <button class="btn btn-r btn-sm oculto" id="usr-btn-borrar-definitivo" onclick="borrarUsuarioDefinitivo()">🗑 Borrar definitivamente</button>
         <button class="btn btn-g" style="flex:1" onclick="closeOv('modal-usuario')">Cancelar</button>
         <button class="btn btn-v" style="flex:2" id="usr-btn-guardar" onclick="guardarUsuario()">✓ Crear</button>
       </div>
@@ -621,24 +627,24 @@
      GitHub, cambiá esta fecha (una sola vez, se puede reemplazar en todos con buscar/reemplazar)
      para forzar que el navegador de TODOS —Staff y delegados— baje la versión nueva, sin que
      nadie tenga que limpiar caché manualmente nunca más. -->
-<script src="js/config.js?v=20260803e"></script>
-<script src="js/datos.js?v=20260803e"></script>
-<script src="js/supabase.js?v=20260803e"></script>
-<script src="js/auth.js?v=20260803e"></script>
-<script src="js/ui.js?v=20260803e"></script>
-<script src="js/calendario.js?v=20260803e"></script>
-<script src="js/horarios.js?v=20260803e"></script>
-<script src="js/recurrentes.js?v=20260803e"></script>
-<script src="js/dashboard.js?v=20260803e"></script>
-<script src="js/eventuales.js?v=20260803e"></script>
-<script src="js/aprobaciones.js?v=20260803e"></script>
-<script src="js/validaciones.js?v=20260803e"></script>
-<script src="js/evaluacion.js?v=20260803e"></script>
-<script src="js/rendimiento.js?v=20260803e"></script>
-<script src="js/informes.js?v=20260803e"></script>
-<script src="js/analitica.js?v=20260803e"></script>
-<script src="js/tareasAV.js?v=20260803e"></script>
-<script src="js/admin.js?v=20260803e"></script>
-<script src="js/main.js?v=20260803e"></script>
+<script src="js/config.js?v=20260803f"></script>
+<script src="js/datos.js?v=20260803f"></script>
+<script src="js/supabase.js?v=20260803f"></script>
+<script src="js/auth.js?v=20260803f"></script>
+<script src="js/ui.js?v=20260803f"></script>
+<script src="js/calendario.js?v=20260803f"></script>
+<script src="js/horarios.js?v=20260803f"></script>
+<script src="js/recurrentes.js?v=20260803f"></script>
+<script src="js/dashboard.js?v=20260803f"></script>
+<script src="js/eventuales.js?v=20260803f"></script>
+<script src="js/aprobaciones.js?v=20260803f"></script>
+<script src="js/validaciones.js?v=20260803f"></script>
+<script src="js/evaluacion.js?v=20260803f"></script>
+<script src="js/rendimiento.js?v=20260803f"></script>
+<script src="js/informes.js?v=20260803f"></script>
+<script src="js/analitica.js?v=20260803f"></script>
+<script src="js/tareasAV.js?v=20260803f"></script>
+<script src="js/admin.js?v=20260803f"></script>
+<script src="js/main.js?v=20260803f"></script>
 </body>
 </html>
