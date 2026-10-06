@@ -216,29 +216,19 @@ function adjuntarFotoRecurrente(conjunto, mes, tareaIdx) {
   input.onchange = () => {
     const file = input.files[0];
     if (!file) return;
-    comprimirImagen(file).then(blob => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const slot = ensureEstadoSlot(conjunto, mes, tareaIdx, slotIdx);
-        slot.hasFoto = true;
-        slot.fotoCount = (slot.fotoCount || 0) + 1;
-        const fotoCount = slot.fotoCount;
-
-        const key = claveFoto(conjunto, mes, tareaIdx, slotIdx);
-        FOTOS_LOCAL[key] = FOTOS_LOCAL[key] || [];
-        // Vista previa optimista con el base64 mientras sube — listarFotosSupabase() ya no
-        // necesita "reemplazar" esta entrada como antes con Firebase; conviven mostrando ambas
-        // fuentes (ver verFotoRecurrente), y la local se limpia sola al cerrar el modal.
-        FOTOS_LOCAL[key].push({ data: reader.result, nombre: file.name, ts: tsCol() });
-        guardarFotosLocal();
-
-        subirFotoASupabase(conjunto, mes, tareaIdx, slotIdx, fotoCount, blob);
-
-        toast('📷 Foto adjuntada');
-        programarGuardadoEstadoSlot(conjunto, mes, tareaIdx, slotIdx); // guardado individual: solo esta casilla, ninguna otra se toca
-        renderRecurrentes();
-      };
-      reader.readAsDataURL(blob);
+    toast('⏳ Subiendo foto…');
+    comprimirImagen(file).then(async blob => {
+      const slot = ensureEstadoSlot(conjunto, mes, tareaIdx, slotIdx);
+      // La casilla se marca con foto SOLO cuando Supabase confirma la subida. Antes se marcaba
+      // de inmediato (vista previa optimista): si la subida fallaba, la casilla quedaba con 📷
+      // pero sin imagen real, y nadie más que quien la subió podía verla.
+      const fotoCount = await subirFotoASupabase(conjunto, mes, tareaIdx, slotIdx, (slot.fotoCount || 0) + 1, blob);
+      if (!fotoCount) return;
+      slot.hasFoto = true;
+      slot.fotoCount = fotoCount;
+      toast('📷 Foto subida');
+      programarGuardadoEstadoSlot(conjunto, mes, tareaIdx, slotIdx); // guardado individual: solo esta casilla, ninguna otra se toca
+      renderRecurrentes();
     });
   };
   input.click();
@@ -270,29 +260,50 @@ function comprimirImagen(file, maxAncho = FOTO_MAX_ANCHO, calidad = FOTO_CALIDAD
 
 // Ruta del archivo en el bucket privado de Supabase Storage. El primer segmento (conjunto) es
 // lo que las políticas RLS de storage.objects usan para decidir quién puede ver/subir/borrar.
-function rutaFotoSupabase(conjunto, mes, tareaIdx, slotIdx, fotoCount) {
-  return `${conjunto}/${mes}/${tareaIdx}_${slotIdx}_${fotoCount}.jpg`;
+// Supabase Storage rechaza tildes y ñ en las rutas ("Invalid key"), así que la carpeta usa el
+// nombre del conjunto sin ellas (Casas del Alférez → Casas del Alferez). Debe coincidir EXACTO
+// con carpeta_conjunto() en supabase_fotos_fix.sql, que es lo que usa la política RLS.
+const _SIN_TILDES = { 'á': 'a', 'é': 'e', 'í': 'i', 'ó': 'o', 'ú': 'u', 'Á': 'A', 'É': 'E', 'Í': 'I', 'Ó': 'O', 'Ú': 'U', 'ñ': 'n', 'Ñ': 'N', 'ü': 'u', 'Ü': 'U' };
+function carpetaFotosConjunto(conjunto) {
+  return String(conjunto).replace(/[áéíóúÁÉÍÓÚñÑüÜ]/g, ch => _SIN_TILDES[ch]);
 }
 
+function rutaFotoSupabase(conjunto, mes, tareaIdx, slotIdx, fotoCount) {
+  return `${carpetaFotosConjunto(conjunto)}/${mes}/${tareaIdx}_${slotIdx}_${fotoCount}.jpg`;
+}
+
+// Sube SIN upsert: upsert exige además permiso de UPDATE en el bucket, que la política original
+// no tenía — la subida fallaba. Si el nombre ya existe (fotoCount desfasado), prueba el
+// siguiente número. Retorna el fotoCount con que quedó guardada, o null si falló.
 async function subirFotoASupabase(conjunto, mes, tareaIdx, slotIdx, fotoCount, blob) {
-  const ruta = rutaFotoSupabase(conjunto, mes, tareaIdx, slotIdx, fotoCount);
-  const { error } = await SB.storage.from(SUPABASE_FOTOS_BUCKET).upload(ruta, blob, { contentType: 'image/jpeg', upsert: true });
+  let error = null;
+  for (let intento = 0; intento < 10; intento++, fotoCount++) {
+    const ruta = rutaFotoSupabase(conjunto, mes, tareaIdx, slotIdx, fotoCount);
+    ({ error } = await SB.storage.from(SUPABASE_FOTOS_BUCKET).upload(ruta, blob, { contentType: 'image/jpeg', upsert: false }));
+    if (!error) break;
+    const yaExiste = /exists|duplicate/i.test(error.message || '') || String(error.statusCode) === '409';
+    if (!yaExiste) break;
+  }
   if (error) {
     console.error('Error subiendo foto a Supabase Storage', error.message);
-    toast('⚠️ No se pudo subir la foto — revisa tu conexión');
-    return;
+    toast(`⚠️ La foto NO se subió (${error.message || 'error desconocido'}). Intenta de nuevo; si sigue, avisa a Staff.`, 8000);
+    return null;
   }
   await SB.rpc('ajustar_contador', { p_clave: 'fotos_bytes', p_delta: blob.size });
   await cargarContadorFotos();
+  return fotoCount;
 }
 
 // Trae la lista de fotos de UNA casilla puntual (conjunto+mes+tarea+repetición) desde Supabase,
 // con una URL firmada válida por 1 hora (el bucket es privado, no hay links directos permanentes).
 async function listarFotosSupabase(conjunto, mes, tareaIdx, slotIdx) {
-  const carpeta = `${conjunto}/${mes}`;
+  const carpeta = `${carpetaFotosConjunto(conjunto)}/${mes}`;
   const prefijoArchivo = `${tareaIdx}_${slotIdx}_`;
   const { data, error } = await SB.storage.from(SUPABASE_FOTOS_BUCKET).list(carpeta, { search: prefijoArchivo });
-  if (error || !data) return [];
+  if (error || !data) {
+    if (error) console.error('Error listando fotos en Supabase Storage', error.message);
+    return [];
+  }
   const propias = data.filter(f => f.name.startsWith(prefijoArchivo));
   const conUrl = await Promise.all(propias.map(async f => {
     const { data: firmada } = await SB.storage.from(SUPABASE_FOTOS_BUCKET).createSignedUrl(`${carpeta}/${f.name}`, 3600);
@@ -322,6 +333,7 @@ async function verFotoRecurrente(conjunto, mes, tareaIdx) {
     fotos.push(...remotas, ...locales);
   }
   fotos.sort((a, b) => (a.ts < b.ts ? 1 : -1));
+  const tieneMarcaFoto = [...Array(veces).keys()].some(s => ensureEstadoSlot(conjunto, mes, tareaIdx, s).hasFoto);
 
   document.getElementById('ver-foto-lista').innerHTML = fotos.length
     ? fotos.map(f => `
@@ -329,7 +341,7 @@ async function verFotoRecurrente(conjunto, mes, tareaIdx) {
           <img src="${f.src}" style="width:100%;border-radius:8px;border:1px solid var(--brd)">
           <div style="font-size:9px;color:var(--txs);margin-top:4px">${f.nombre} · ${f.ts}${(tarea.veces || 1) > 1 ? ` · Repetición ${f.slot}` : ''}${f.data ? ' · ⏳ subiendo…' : ''}</div>
         </div>`).join('')
-    : '<div style="font-size:11px;color:var(--txs);text-align:center;padding:16px">Sin fotos para esta tarea.</div>';
+    : `<div style="font-size:11px;color:var(--txs);text-align:center;padding:16px">Sin fotos para esta tarea.${tieneMarcaFoto ? '<br><br>⚠️ La casilla figura con foto, pero la imagen no está en el servidor — la subida no se completó. Hay que volver a adjuntarla con 📷.' : ''}</div>`;
 }
 
 function abrirComentariosRecurrente(conjunto, tareaIdx) {

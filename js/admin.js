@@ -702,7 +702,7 @@ async function purgarFotosRecurrentes() {
 
   for (const c of conjuntos) {
     for (const mes of mesesAPurgar) {
-      const carpeta = `${c.n}/${mes}`;
+      const carpeta = `${carpetaFotosConjunto(c.n)}/${mes}`;
       const { data, error } = await SB.storage.from(SUPABASE_FOTOS_BUCKET).list(carpeta);
       if (error || !data || !data.length) continue;
       const tareas = tareasRecPara(c.n, mes);
