@@ -35,6 +35,14 @@ async function autenticarEnSupabase(cedula) {
   if (!login.ok) { console.error('No se pudo autenticar en Supabase:', login.error); return login; }
   const carga = await cargarTodoDesdeSupabase();
   if (!carga.ok) console.error('No se pudieron cargar los datos de Supabase:', carga.error);
+  // La recarga puede traer los usuarios en otro orden (Supabase no garantiza orden sin ORDER BY):
+  // se re-sincroniza el índice de la sesión desde la cédula para no quedar apuntando a otra persona.
+  const registro = DATA.cedulas[cedula];
+  if (SESION_ACTUAL && registro && SESION_ACTUAL.cedula === cedula && SESION_ACTUAL.idx !== registro.idx) {
+    SESION_ACTUAL.idx = registro.idx;
+    SESION_ACTUAL.nombre = (DATA.usuarios[registro.idx] || {}).n || SESION_ACTUAL.nombre;
+    localStorage.setItem(SESSION_KEY, JSON.stringify(SESION_ACTUAL));
+  }
   return carga;
 }
 

@@ -114,7 +114,7 @@ async function cargarTodoDesdeSupabase() {
     fechasRes, fechasGlobalRes, avRes, eventosRes, horariosRes, sabadosRes, festivosRes, vacacionesRes
   ] = await Promise.all([
     SB.from('conjuntos').select('*'),
-    SB.from('usuarios').select('*'),
+    SB.from('usuarios').select('*').order('nombre'), // orden fijo: el índice local (cedulas → idx) no debe cambiar entre cargas
     SB.from('delegado_conjuntos').select('*'),
     SB.from('tareas_recurrentes_catalogo').select('*').order('id'),
     fetchTodasLasFilas(() => SB.from('tareas_eventuales').select('*')),

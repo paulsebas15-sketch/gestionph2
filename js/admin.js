@@ -453,6 +453,9 @@ function guardarUsuario() {
   let idxGuardado;
   if (editIdx >= 0) {
     const u = DATA.usuarios[editIdx];
+    const cedulaPrevia = cedulaPorIdxUsuario(editIdx);
+    const estabaActivo = cedulaPrevia ? DATA.cedulas[cedulaPrevia].activo !== false : true;
+    if (estabaActivo && !activo && !puedeDesactivarUsuario(editIdx)) return;
     Object.assign(u, { n: nombre, rol, cargo, equipo, fechaIngreso, medioTiempo, fechaVencimientoContrato, tambienDelegado });
     const cedulaExistente = cedulaPorIdxUsuario(editIdx);
     if (cedulaExistente) DATA.cedulas[cedulaExistente].activo = activo;
@@ -470,12 +473,33 @@ function guardarUsuario() {
   renderAdmin();
 }
 
+// Protección de acceso: nadie se desactiva a sí mismo, y desactivar a un Staff exige escribir
+// su nombre (si se desactiva a todos los Staff, nadie puede volver a entrar a Admin para
+// reactivarlos — solo con SQL en Supabase, como pasó el 6 oct 2026).
+function puedeDesactivarUsuario(idx) {
+  const u = DATA.usuarios[idx];
+  if (!u) return false;
+  if (SESION_ACTUAL && SESION_ACTUAL.idx === idx) {
+    toast('⛔ No puedes desactivar tu propio usuario');
+    return false;
+  }
+  if (u.rol === 'staff') {
+    const escrito = prompt(`"${u.n}" es Staff. Si lo desactivas no podrá entrar a la app.\n\nPara confirmar, escribe su nombre completo:`);
+    if ((escrito || '').trim() !== u.n) {
+      toast('Desactivación cancelada');
+      return false;
+    }
+  }
+  return true;
+}
+
 // No se elimina físicamente (regla PRD sección 5.13: "no eliminar para no perder
 // historial") — "Eliminar" aquí desactiva el acceso del usuario.
 function eliminarUsuario() {
   const editIdx = parseInt(document.getElementById('usr-edit-idx').value, 10);
   const u = DATA.usuarios[editIdx];
   if (!u) return;
+  if (!puedeDesactivarUsuario(editIdx)) return;
   if (!confirm(`¿Desactivar a "${u.n}"? No podrá iniciar sesión, pero su historial se conserva.`)) return;
   const cedula = cedulaPorIdxUsuario(editIdx);
   if (cedula) DATA.cedulas[cedula].activo = false;
