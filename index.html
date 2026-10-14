@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>GestiónPH v2.0 — A&V Victoria Pineda</title>
-<link rel="stylesheet" href="css/estilos.css?v=20260803f">
+<link rel="stylesheet" href="css/estilos.css?v=20261014a">
 <!-- Supabase (datos + fotos) -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <!-- jsPDF para informes -->
@@ -21,14 +21,43 @@
     <div class="login-title">Victoria Pineda<br>Administraciones</div>
     <div class="login-sub">Sistema de Gestión PH · Cali, Colombia</div>
     <div class="login-card">
-      <h3>Iniciar sesión</h3>
-      <div class="form-group">
-        <label class="form-label">Número de cédula</label>
-        <input class="form-input" id="input-cedula" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Ej. 1234567890">
+      <div id="login-modo-clave">
+        <h3>Iniciar sesión</h3>
+        <div class="form-group">
+          <label class="form-label">Número de cédula</label>
+          <input class="form-input" id="input-cedula" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="username" placeholder="Tu número de cédula">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Clave</label>
+          <input class="form-input" id="input-clave" type="password" autocomplete="current-password" placeholder="Tu clave">
+        </div>
+        <button class="btn btn-v" style="width:100%" id="btn-login" onclick="intentarLogin()">Ingresar →</button>
+        <p style="font-size:10px;margin-top:12px;text-align:center"><a href="#" onclick="mostrarModoLogin('pin');return false" style="color:var(--v2);font-weight:600">¿Primera vez o tienes un PIN? Crea tu clave</a></p>
       </div>
-      <button class="btn btn-v" style="width:100%" onclick="intentarLogin()">Ingresar →</button>
+      <div id="login-modo-pin" class="oculto">
+        <h3>Crear mi clave</h3>
+        <p style="font-size:9px;color:var(--txs);margin-bottom:10px">Usa el PIN temporal que te dio Staff (vence en 72 horas). Tu clave es personal: nadie más la conoce, ni siquiera Staff.</p>
+        <div class="form-group">
+          <label class="form-label">Número de cédula</label>
+          <input class="form-input" id="input-pin-cedula" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="username" placeholder="Tu número de cédula">
+        </div>
+        <div class="form-group">
+          <label class="form-label">PIN temporal</label>
+          <input class="form-input" id="input-pin" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="6 dígitos">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Clave nueva (mínimo 6 caracteres)</label>
+          <input class="form-input" id="input-pin-clave" type="password" autocomplete="new-password">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Repite la clave nueva</label>
+          <input class="form-input" id="input-pin-clave2" type="password" autocomplete="new-password">
+        </div>
+        <button class="btn btn-v" style="width:100%" id="btn-crear-clave" onclick="intentarCrearClave()">Crear clave e ingresar →</button>
+        <p style="font-size:10px;margin-top:12px;text-align:center"><a href="#" onclick="mostrarModoLogin('clave');return false" style="color:var(--v2);font-weight:600">← Ya tengo clave</a></p>
+      </div>
       <div class="login-error oculto" id="login-error"></div>
-      <p style="font-size:9px;color:var(--txs);margin-top:10px;text-align:center">Si no puedes ingresar, contacta al administrador</p>
+      <p style="font-size:9px;color:var(--txs);margin-top:10px;text-align:center">¿Olvidaste tu clave? Pide un PIN nuevo a Staff.</p>
     </div>
     <div style="font-size:9px;color:rgba(255,255,255,.3)">GestiónPH v2.0 · A&V Victoria Pineda</div>
   </div>
@@ -437,6 +466,7 @@
       <div style="display:flex;gap:8px;margin-top:4px">
         <button class="btn btn-r btn-sm oculto" id="usr-btn-eliminar" onclick="eliminarUsuario()">⛔ Desactivar</button>
         <button class="btn btn-r btn-sm oculto" id="usr-btn-borrar-definitivo" onclick="borrarUsuarioDefinitivo()">🗑 Borrar definitivamente</button>
+        <button class="btn btn-g btn-sm oculto" id="usr-btn-pin" onclick="generarPinUsuario()">🔑 Generar PIN</button>
         <button class="btn btn-g" style="flex:1" onclick="closeOv('modal-usuario')">Cancelar</button>
         <button class="btn btn-v" style="flex:2" id="usr-btn-guardar" onclick="guardarUsuario()">✓ Crear</button>
       </div>
@@ -627,24 +657,24 @@
      GitHub, cambiá esta fecha (una sola vez, se puede reemplazar en todos con buscar/reemplazar)
      para forzar que el navegador de TODOS —Staff y delegados— baje la versión nueva, sin que
      nadie tenga que limpiar caché manualmente nunca más. -->
-<script src="js/config.js?v=20260803f"></script>
-<script src="js/datos.js?v=20260803f"></script>
-<script src="js/supabase.js?v=20260803f"></script>
-<script src="js/auth.js?v=20260803f"></script>
-<script src="js/ui.js?v=20260803f"></script>
-<script src="js/calendario.js?v=20260803f"></script>
-<script src="js/horarios.js?v=20260803f"></script>
-<script src="js/recurrentes.js?v=20260803f"></script>
-<script src="js/dashboard.js?v=20260803f"></script>
-<script src="js/eventuales.js?v=20260803f"></script>
-<script src="js/aprobaciones.js?v=20260803f"></script>
-<script src="js/validaciones.js?v=20260803f"></script>
-<script src="js/evaluacion.js?v=20260803f"></script>
-<script src="js/rendimiento.js?v=20260803f"></script>
-<script src="js/informes.js?v=20260803f"></script>
-<script src="js/analitica.js?v=20260803f"></script>
-<script src="js/tareasAV.js?v=20260803f"></script>
-<script src="js/admin.js?v=20260803f"></script>
-<script src="js/main.js?v=20260803f"></script>
+<script src="js/config.js?v=20261014a"></script>
+<script src="js/datos.js?v=20261014a"></script>
+<script src="js/supabase.js?v=20261014a"></script>
+<script src="js/auth.js?v=20261014a"></script>
+<script src="js/ui.js?v=20261014a"></script>
+<script src="js/calendario.js?v=20261014a"></script>
+<script src="js/horarios.js?v=20261014a"></script>
+<script src="js/recurrentes.js?v=20261014a"></script>
+<script src="js/dashboard.js?v=20261014a"></script>
+<script src="js/eventuales.js?v=20261014a"></script>
+<script src="js/aprobaciones.js?v=20261014a"></script>
+<script src="js/validaciones.js?v=20261014a"></script>
+<script src="js/evaluacion.js?v=20261014a"></script>
+<script src="js/rendimiento.js?v=20261014a"></script>
+<script src="js/informes.js?v=20261014a"></script>
+<script src="js/analitica.js?v=20261014a"></script>
+<script src="js/tareasAV.js?v=20261014a"></script>
+<script src="js/admin.js?v=20261014a"></script>
+<script src="js/main.js?v=20261014a"></script>
 </body>
 </html>
