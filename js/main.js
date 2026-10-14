@@ -36,46 +36,12 @@ async function initApp() {
     localStorage.removeItem(PENDIENTE_OFFLINE_KEY);
   }
 
-  // Conjuntos/usuarios/cédulas son de lectura pública (RLS los deja ver sin sesión) — se cargan
-  // ya mismo para poder validar la cédula en el login. Las tablas protegidas por conjunto
-  // (tareasEve, ESTADO, etc.) llegan vacías por ahora — RLS las filtra hasta que haya sesión.
-  const cargaInicial = await cargarTodoDesdeSupabase();
-  if (!cargaInicial.ok || !DATA.usuarios.length) {
-    poblarDatosEjemploSiVacio(); // sin internet / Supabase caído — usar datos mínimos de ejemplo
-  }
-
-  const sesion = recuperarSesion();
-  if (sesion) {
-    await autenticarEnSupabase(sesion.cedula); // ahora sí trae los datos reales con permisos
-    mostrarApp();
-  } else {
-    mostrarLogin();
-  }
-}
-
-function poblarDatosEjemploSiVacio() {
-  if (DATA.usuarios.length > 0) return;
-  // Datos mínimos de ejemplo para poder operar la app antes de migrar los datos reales
-  DATA.conjuntos = {
-    def: [{ n: 'Arboleda Cañasgordas', del: 'Camila García', c: '#4a7c59', eval: {} }],
-    pro: [{ n: 'Camelias', del: 'Juan Diego', c: '#7c4a4a', eval: {} }]
-  };
-  DATA.usuarios = [
-    { n: 'Paul Molina', rol: 'staff', conjuntos: [], cargo: 'Director de Procesos', equipo: 'Ambos', av: 'PM', c: '#2d6a4f', ra: 'paul' },
-    { n: 'Camila García', rol: 'delegado', conjuntos: ['Arboleda Cañasgordas'], cargo: 'Delegada', equipo: 'Definitivos', av: 'CG', c: '#7a5c2e', ra: 'camila' },
-    { n: 'Juan Diego', rol: 'delegado', conjuntos: ['Camelias'], cargo: 'Delegado A&V', equipo: 'Provisional (A&V)', av: 'JD', c: '#5a7a6a', ra: 'juandiego' }
-  ];
-  DATA.cedulas = {
-    '1234567890': { idx: 0, rol: 'staff', activo: true },
-    '0987654321': { idx: 1, rol: 'delegado', activo: true },
-    '1111111111': { idx: 2, rol: 'delegado', activo: true }
-  };
-  DATA.tareasRec = [
-    { n: 'Revisión planta eléctrica', desc: 'Verificar nivel de aceite y batería', aplica: 'Definitivos', frec: 'mensual', veces: 1, cuando: '', limite: '', bimestral: false, foto: false, autoEval: true, evalPts: 1, deleted: false },
-    { n: 'Pago reteica', desc: 'Pago bimestral impuesto', aplica: 'Todos', frec: 'mensual', veces: 1, cuando: '', limite: '', bimestral: true, foto: false, autoEval: true, evalPts: 1, deleted: false }
-  ];
-  DATA.tareasEve = [];
-  guardarLocal();
+  // Sin sesión ya no se carga nada: la tabla usuarios dejó de ser pública (exponía todas las
+  // cédulas). Si este navegador conserva una sesión válida de Supabase, se retoma y ahí sí se
+  // traen los datos con permisos; si no, pantalla de login (cédula + clave).
+  const sesion = await recuperarSesion();
+  if (sesion) mostrarApp();
+  else mostrarLogin();
 }
 
 function mostrarLogin() {
@@ -83,28 +49,57 @@ function mostrarLogin() {
   document.getElementById('pantalla-app').classList.add('oculto');
 }
 
-async function intentarLogin() {
-  const cedula = document.getElementById('input-cedula').value.trim();
-  const errorEl = document.getElementById('login-error');
-  const btn = document.querySelector('.login-card .btn-v');
+// Alterna entre "Iniciar sesión" (cédula + clave) y "Crear mi clave" (cédula + PIN + clave nueva)
+function mostrarModoLogin(modo) {
+  document.getElementById('login-modo-clave').classList.toggle('oculto', modo !== 'clave');
+  document.getElementById('login-modo-pin').classList.toggle('oculto', modo !== 'pin');
+  document.getElementById('login-error').classList.add('oculto');
+  if (modo === 'pin') document.getElementById('input-pin-cedula').value = document.getElementById('input-cedula').value;
+}
 
-  const resultado = iniciarSesion(cedula);
+async function ejecutarLogin(btnId, textoBtn, accion) {
+  const errorEl = document.getElementById('login-error');
+  const btn = document.getElementById(btnId);
+  errorEl.classList.add('oculto');
+  btn.disabled = true;
+  btn.textContent = 'Entrando…';
+  const resultado = await accion();
+  btn.disabled = false;
+  btn.textContent = textoBtn;
   if (!resultado.ok) {
     errorEl.textContent = resultado.error;
     errorEl.classList.remove('oculto');
     return;
   }
-  errorEl.classList.add('oculto');
-
-  if (btn) { btn.disabled = true; btn.textContent = 'Entrando…'; }
-  await autenticarEnSupabase(cedula);
-  if (btn) { btn.disabled = false; btn.textContent = 'Ingresar →'; }
+  document.getElementById('input-clave').value = '';
+  ['input-pin', 'input-pin-clave', 'input-pin-clave2'].forEach(id => { document.getElementById(id).value = ''; });
+  mostrarModoLogin('clave');
   mostrarApp();
 }
 
-function salir() {
-  cerrarSesion();
+function intentarLogin() {
+  const cedula = document.getElementById('input-cedula').value.trim();
+  const clave = document.getElementById('input-clave').value;
+  ejecutarLogin('btn-login', 'Ingresar →', () => iniciarSesion(cedula, clave));
+}
+
+function intentarCrearClave() {
+  const cedula = document.getElementById('input-pin-cedula').value.trim();
+  const pin = document.getElementById('input-pin').value.trim();
+  const clave = document.getElementById('input-pin-clave').value;
+  const clave2 = document.getElementById('input-pin-clave2').value;
+  const errorEl = document.getElementById('login-error');
+  const mostrarError = msg => { errorEl.textContent = msg; errorEl.classList.remove('oculto'); };
+  if (!cedula || !pin) return mostrarError('Escribe tu cédula y el PIN que te dio Staff.');
+  if (clave.length < 6) return mostrarError('La clave debe tener al menos 6 caracteres.');
+  if (clave !== clave2) return mostrarError('Las dos claves no coinciden.');
+  ejecutarLogin('btn-crear-clave', 'Crear clave e ingresar →', () => crearClaveConPin(cedula, pin, clave));
+}
+
+async function salir() {
+  await cerrarSesion();
   document.getElementById('input-cedula').value = '';
+  document.getElementById('input-clave').value = '';
   mostrarLogin();
 }
 
@@ -223,12 +218,16 @@ function precargarLogo() {
   img.src = 'assets/logo.png';
 }
 
-// Enter en el campo de cédula también intenta login
+// Enter en los campos de login también envía el formulario correspondiente
 document.addEventListener('DOMContentLoaded', () => {
-  const inputCedula = document.getElementById('input-cedula');
-  if (inputCedula) {
-    inputCedula.addEventListener('keydown', e => { if (e.key === 'Enter') intentarLogin(); });
-  }
+  ['input-cedula', 'input-clave'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('keydown', e => { if (e.key === 'Enter') intentarLogin(); });
+  });
+  ['input-pin-cedula', 'input-pin', 'input-pin-clave', 'input-pin-clave2'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('keydown', e => { if (e.key === 'Enter') intentarCrearClave(); });
+  });
   initApp();
   precargarLogo();
 });

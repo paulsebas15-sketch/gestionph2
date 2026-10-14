@@ -1,72 +1,73 @@
-// auth.js — Login por cédula, sesión, control de acceso por rol
+// auth.js — Login por cédula + clave, sesión, control de acceso por rol
 // GestiónPH v2.0
-// Depende de: config.js, datos.js
+// Depende de: config.js, datos.js, supabase.js
 
 let SESION_ACTUAL = null; // { cedula, idx, rol, nombre }
 
-function iniciarSesion(cedula) {
+// Con la sesión de Supabase ya abierta: trae los datos (ahora sí con permisos) y valida que la
+// cédula exista y esté activa. La tabla usuarios ya no se puede leer sin sesión, así que esta
+// validación solo es posible DESPUÉS de autenticar.
+async function abrirSesionApp(cedula) {
+  const carga = await cargarTodoDesdeSupabase();
+  if (!carga.ok) console.error('No se pudieron cargar los datos de Supabase:', carga.error);
   const registro = DATA.cedulas[cedula];
-  if (!registro) {
-    return { ok: false, error: 'Cédula no registrada. Contacta al administrador.' };
-  }
-  if (registro.activo === false) {
+  const usuario = registro ? DATA.usuarios[registro.idx] : null;
+  if (!registro || !usuario || registro.activo === false) {
+    await cerrarSesion();
     return { ok: false, error: 'Acceso desactivado. Contacta al administrador.' };
   }
-  const usuario = DATA.usuarios[registro.idx];
-  if (!usuario) {
-    return { ok: false, error: 'Usuario no encontrado. Contacta al administrador.' };
-  }
-  SESION_ACTUAL = {
-    cedula,
-    idx: registro.idx,
-    rol: registro.rol,
-    nombre: usuario.n
-  };
+  SESION_ACTUAL = { cedula, idx: registro.idx, rol: registro.rol, nombre: usuario.n };
   localStorage.setItem(SESSION_KEY, JSON.stringify(SESION_ACTUAL));
   return { ok: true, sesion: SESION_ACTUAL };
 }
 
-// Autentica en Supabase y trae los datos reales (con los permisos ya aplicados por RLS).
-// Devuelve una promesa para que main.js espere a que termine antes de mostrar la app —
-// si no se espera, la pantalla mostraría datos vacíos/viejos por un instante.
-async function autenticarEnSupabase(cedula) {
-  if (typeof iniciarSesionSupabase !== 'function') return { ok: false, error: 'Supabase no disponible' };
-  const login = await iniciarSesionSupabase(cedula);
-  if (!login.ok) { console.error('No se pudo autenticar en Supabase:', login.error); return login; }
-  const carga = await cargarTodoDesdeSupabase();
-  if (!carga.ok) console.error('No se pudieron cargar los datos de Supabase:', carga.error);
-  // La recarga puede traer los usuarios en otro orden (Supabase no garantiza orden sin ORDER BY):
-  // se re-sincroniza el índice de la sesión desde la cédula para no quedar apuntando a otra persona.
-  const registro = DATA.cedulas[cedula];
-  if (SESION_ACTUAL && registro && SESION_ACTUAL.cedula === cedula && SESION_ACTUAL.idx !== registro.idx) {
-    SESION_ACTUAL.idx = registro.idx;
-    SESION_ACTUAL.nombre = (DATA.usuarios[registro.idx] || {}).n || SESION_ACTUAL.nombre;
-    localStorage.setItem(SESSION_KEY, JSON.stringify(SESION_ACTUAL));
+// Login normal: cédula + la clave que la persona creó con su PIN. Si falla, mensaje genérico
+// (no se dice si lo incorrecto fue la cédula o la clave).
+async function iniciarSesion(cedula, clave) {
+  if (!cedula || !clave) return { ok: false, error: 'Escribe tu cédula y tu clave.' };
+  const login = await iniciarSesionSupabase(cedula, clave);
+  if (!login.ok) {
+    console.error('Login fallido:', login.error);
+    return { ok: false, error: 'Cédula o clave incorrecta. Si no tienes clave o la olvidaste, pide un PIN a Staff.' };
   }
-  return carga;
+  return abrirSesionApp(cedula);
 }
 
-function cerrarSesion() {
+const MENSAJES_PIN = {
+  clave_corta: 'La clave debe tener al menos 6 caracteres.',
+  pin_incorrecto: 'Cédula o PIN incorrecto.',
+  pin_invalido: 'Ese PIN ya venció, ya se usó o se bloqueó por intentos fallidos. Pide uno nuevo a Staff.',
+  error: 'No se pudo completar. Revisa tu conexión e inténtalo de nuevo.'
+};
+
+// Primer ingreso / clave olvidada: cédula + PIN temporal + clave nueva → queda logueado.
+async function crearClaveConPin(cedula, pin, nuevaClave) {
+  const res = await canjearPinSupabase(cedula, pin, nuevaClave);
+  if (!res.ok) {
+    if (res.detalle) console.error('Canje de PIN fallido:', res.detalle);
+    return { ok: false, error: MENSAJES_PIN[res.codigo] || MENSAJES_PIN.error };
+  }
+  return iniciarSesion(cedula, nuevaClave);
+}
+
+async function cerrarSesion() {
   SESION_ACTUAL = null;
   localStorage.removeItem(SESSION_KEY);
-  if (typeof SB !== 'undefined') SB.auth.signOut();
+  if (typeof SB !== 'undefined') await SB.auth.signOut();
 }
 
-// Intenta recuperar una sesión válida guardada localmente (al recargar la app)
-function recuperarSesion() {
+// Al recargar la app: si Supabase todavía tiene una sesión válida guardada en este navegador,
+// se retoma sin pedir clave de nuevo (y se revalida que el usuario siga activo).
+async function recuperarSesion() {
   try {
-    const raw = localStorage.getItem(SESSION_KEY);
-    if (!raw) return null;
-    const sesion = JSON.parse(raw);
-    // Revalidar contra el estado actual de datos (por si el usuario fue desactivado entretanto)
-    const registro = DATA.cedulas[sesion.cedula];
-    if (!registro || registro.activo === false) {
-      cerrarSesion();
-      return null;
-    }
-    SESION_ACTUAL = { ...sesion, rol: registro.rol, idx: registro.idx };
-    return SESION_ACTUAL;
+    const { data } = await SB.auth.getSession();
+    const email = data && data.session && data.session.user && data.session.user.email;
+    if (!email) { localStorage.removeItem(SESSION_KEY); return null; }
+    const cedula = email.split('@')[0];
+    const res = await abrirSesionApp(cedula);
+    return res.ok ? SESION_ACTUAL : null;
   } catch (e) {
+    console.error('No se pudo recuperar la sesión:', e);
     return null;
   }
 }

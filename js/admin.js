@@ -124,7 +124,7 @@ function renderAdmin() {
       <div class="card">
         <div class="section-title">👥 Usuarios y accesos</div>
         <table class="tbl">
-          <thead><tr><th>Nombre</th><th>Cargo</th><th>Rol</th><th>Estado</th><th></th></tr></thead>
+          <thead><tr><th>Nombre</th><th>Cargo</th><th>Rol</th><th>Estado</th><th>Clave</th><th></th></tr></thead>
           <tbody>${renderFilasUsuarios()}</tbody>
         </table>
         <button class="btn btn-v btn-sm" style="margin-top:8px" onclick="abrirNuevoUsuario()">+ Nuevo usuario</button>
@@ -359,9 +359,10 @@ function renderFilasUsuarios() {
         <td style="font-size:9px;color:var(--txs)">${u.cargo || '—'}</td>
         <td style="font-size:9px">${u.rol === 'staff' ? (u.tambienDelegado ? 'Staff + Delegado' : 'Staff') : 'Delegado'}</td>
         <td><span style="font-size:9px;color:${activo ? 'var(--vm)' : 'var(--rj)'}">${activo ? '✅ Activo' : '⛔ Inactivo'}</span></td>
+        <td style="font-size:9px;color:${u.claveConfigurada ? 'var(--vm)' : 'var(--txs)'}">${u.claveConfigurada ? '🔑 Creada' : '⏳ Pendiente'}</td>
         <td><button class="btn btn-sm btn-g" style="font-size:9px;padding:2px 6px" onclick="abrirEditarUsuario(${idx})">✏️</button></td>
       </tr>`;
-  }).join('') || '<tr><td colspan="5" style="font-size:10px;color:var(--txs);text-align:center;padding:10px">Sin usuarios</td></tr>';
+  }).join('') || '<tr><td colspan="6" style="font-size:10px;color:var(--txs);text-align:center;padding:10px">Sin usuarios</td></tr>';
 }
 
 function cedulaPorIdxUsuario(idx) {
@@ -384,6 +385,7 @@ function abrirNuevoUsuario() {
   document.getElementById('usr-btn-guardar').textContent = '✓ Crear';
   document.getElementById('usr-btn-eliminar').classList.add('oculto');
   document.getElementById('usr-btn-borrar-definitivo').classList.add('oculto');
+  document.getElementById('usr-btn-pin').classList.add('oculto');
   document.getElementById('usr-edit-idx').value = '-1';
   document.getElementById('usr-nombre').value = '';
   document.getElementById('usr-cedula').value = '';
@@ -417,6 +419,7 @@ function abrirEditarUsuario(idx) {
   // Desactivar para los activos; Borrar definitivamente solo una vez que ya está inactivo
   document.getElementById('usr-btn-eliminar').classList.toggle('oculto', !activo);
   document.getElementById('usr-btn-borrar-definitivo').classList.toggle('oculto', activo);
+  document.getElementById('usr-btn-pin').classList.toggle('oculto', !activo);
   document.getElementById('usr-edit-idx').value = String(idx);
   document.getElementById('usr-nombre').value = u.n;
   document.getElementById('usr-cedula').value = cedula || '';
@@ -466,7 +469,7 @@ function guardarUsuario() {
     idxGuardado = DATA.usuarios.length;
     DATA.usuarios.push({ n: nombre, rol, conjuntos: [], cargo, equipo, fechaIngreso, medioTiempo, fechaVencimientoContrato, tambienDelegado, av: iniciales(nombre), c: '#4a7c59', ra: nombre.split(' ')[0].toLowerCase() });
     DATA.cedulas[cedula] = { idx: idxGuardado, rol, activo };
-    toast('✓ Usuario creado');
+    toast('✓ Usuario creado — ábrelo (✏️) y usa "🔑 Generar PIN" para que pueda entrar', 6000);
   }
   closeOv('modal-usuario');
   programarGuardadoUsuario(idxGuardado); // guardado individual: solo este usuario, ningún otro se toca
@@ -551,6 +554,21 @@ async function borrarUsuarioDefinitivo() {
   closeOv('modal-usuario');
   renderAdmin();
   toast(`🗑 ${u.n} borrado definitivamente`);
+}
+
+// PIN temporal (6 dígitos, vence en 72 h, 5 intentos) para que la persona cree o recupere su
+// clave — ver canjear_pin() en supabase_login_clave.sql. Se muestra UNA sola vez: si se pierde,
+// se genera otro (el anterior deja de servir). No cambia la clave actual de la persona.
+async function generarPinUsuario() {
+  const editIdx = parseInt(document.getElementById('usr-edit-idx').value, 10);
+  const u = DATA.usuarios[editIdx];
+  if (!u) return;
+  if (!confirm(`¿Generar un PIN temporal para "${u.n}"?\n\nCon él podrá crear (o cambiar) su clave. Si ya tenía un PIN sin usar, el anterior deja de servir.`)) return;
+  if (!u._supabaseId) await guardarUsuarioEnSupabase(editIdx); // usuario recién creado: asegura que ya exista en Supabase
+  if (!u._supabaseId) { toast('⛔ El usuario aún no está guardado en el servidor. Intenta de nuevo en unos segundos.'); return; }
+  const res = await generarPinSupabase(u._supabaseId);
+  if (!res.ok) { toast(`⛔ No se pudo generar el PIN (${res.error})`, 6000); return; }
+  prompt(`PIN de ${u.n} — vence en 72 horas.\n\nCópialo y envíaselo en PRIVADO (WhatsApp directo o en persona). Debe entrar con su cédula + este PIN en "Crea tu clave".`, res.pin);
 }
 
 // Saca al usuario del arreglo local y corre los índices de DATA.cedulas (y de la sesión actual)

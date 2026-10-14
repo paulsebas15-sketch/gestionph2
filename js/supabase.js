@@ -44,31 +44,40 @@ window.addEventListener('online', () => {
   }
 });
 
-// Cada cédula obtiene una cuenta real de Supabase Auth por detrás — correo/clave derivados,
-// invisibles para el usuario (sigue usando solo su cédula para entrar).
+// Cada cédula tiene una cuenta de Supabase Auth con correo sintético {cedula}@dominio. La clave
+// es la que cada persona crea con su PIN temporal (ver supabase_login_clave.sql) — antes era
+// derivada de la cédula (gph_{cedula}_2026) y cualquiera que leyera este código podía entrar.
 function emailDeCedula(cedula) {
   return `${cedula}@${AUTH_EMAIL_DOMINIO}`;
 }
-function claveDeCedula(cedula) {
-  return `gph_${cedula}_2026`;
+
+async function iniciarSesionSupabase(cedula, clave) {
+  const { data, error } = await SB.auth.signInWithPassword({ email: emailDeCedula(cedula), password: clave });
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, session: data.session };
 }
 
-// Inicia sesión en Supabase Auth usando la cédula. Si la cuenta de Auth aún no existe (primera
-// vez que esta persona entra desde que activamos Supabase), la crea sola en ese momento.
-async function iniciarSesionSupabase(cedula) {
-  const email = emailDeCedula(cedula);
-  const password = claveDeCedula(cedula);
+// Primer ingreso / clave olvidada: canjea el PIN que dio Staff y fija la clave nueva. Si la
+// persona aún no tiene cuenta de acceso (usuario creado después de la activación), se crea
+// aquí con la clave nueva y se vuelve a canjear (el PIN no se consume hasta que todo sale bien).
+async function canjearPinSupabase(cedula, pin, nuevaClave) {
+  let { data, error } = await SB.rpc('canjear_pin', { p_cedula: cedula, p_pin: pin, p_nueva_clave: nuevaClave });
+  if (error) return { ok: false, codigo: 'error', detalle: error.message };
+  if (data === 'sin_cuenta') {
+    const alta = await SB.auth.signUp({ email: emailDeCedula(cedula), password: nuevaClave });
+    if (alta.error) return { ok: false, codigo: 'error', detalle: alta.error.message };
+    await SB.auth.signOut();
+    ({ data, error } = await SB.rpc('canjear_pin', { p_cedula: cedula, p_pin: pin, p_nueva_clave: nuevaClave }));
+    if (error) return { ok: false, codigo: 'error', detalle: error.message };
+  }
+  return { ok: data === 'ok', codigo: data };
+}
 
-  const { data: loginData, error: loginError } = await SB.auth.signInWithPassword({ email, password });
-  if (!loginError) return { ok: true, session: loginData.session };
-
-  // No existía la cuenta de Auth todavía → se crea (signUp) y se intenta entrar de nuevo
-  const { error: signUpError } = await SB.auth.signUp({ email, password });
-  if (signUpError) return { ok: false, error: signUpError.message };
-
-  const { data: retryData, error: retryError } = await SB.auth.signInWithPassword({ email, password });
-  if (retryError) return { ok: false, error: retryError.message };
-  return { ok: true, session: retryData.session, nuevaCuenta: true };
+// Staff: genera (o regenera) el PIN temporal de un usuario. Devuelve el PIN una sola vez.
+async function generarPinSupabase(usuarioSupabaseId) {
+  const { data, error } = await SB.rpc('generar_pin', { p_usuario_id: usuarioSupabaseId });
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, pin: data };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -167,6 +176,7 @@ async function cargarTodoDesdeSupabase() {
     conjuntos: conjPorUsuario[u.id] || [], activo: u.activo,
     fechaIngreso: u.fecha_ingreso || null, medioTiempo: !!u.medio_tiempo,
     fechaVencimientoContrato: u.fecha_vencimiento_contrato || null, tambienDelegado: !!u.tambien_delegado,
+    claveConfigurada: !!u.clave_configurada, // solo lectura: la marca canjear_pin() en Supabase
     _supabaseId: u.id
   }));
   const cedulas = {};
