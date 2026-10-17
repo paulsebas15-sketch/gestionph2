@@ -248,16 +248,10 @@ function inicializarSlotsNuevaTareaRec(tareaIdx) {
 }
 
 // ─── IDs DE TAREAS EVENTUALES ─────────────────────────────────
-function siguienteIdEventual() {
-  const nums = DATA.tareasEve
-    .map(t => parseInt((t.id || '').replace('T-', ''), 10))
-    .filter(n => !isNaN(n));
-  const archivadas = DATA.tareasArchivo
-    .map(t => parseInt((t.id || '').replace('T-', ''), 10))
-    .filter(n => !isNaN(n));
-  const max = Math.max(0, ...nums, ...archivadas);
-  return `T-${String(max + 1).padStart(3, '0')}`;
-}
+// Las referencias de tareas eventuales (MOK-001…) y de eventos (EV-XXX) ya NO se calculan aquí:
+// las entrega la base de datos (pedirIdEventual / pedirIdEvento en supabase.js). Calcularlas en
+// la app con solo lo visible repetía números para los delegados. Tareas A&V sí siguen aquí
+// porque solo las crea Staff, que ve todas.
 
 function siguienteIdAV() {
   const nums = DATA.tareasAV
@@ -265,14 +259,6 @@ function siguienteIdAV() {
     .filter(n => !isNaN(n));
   const max = Math.max(0, ...nums);
   return `AV-${String(max + 1).padStart(3, '0')}`;
-}
-
-function siguienteIdEvento() {
-  const nums = DATA.eventosCalendario
-    .map(e => parseInt((e.id || '').replace('EV-', ''), 10))
-    .filter(n => !isNaN(n));
-  const max = Math.max(0, ...nums);
-  return `EV-${String(max + 1).padStart(3, '0')}`;
 }
 
 // ─── SNAPSHOT (para exportar/restaurar backup) ───────────────

@@ -228,7 +228,10 @@ function actualizarEncargadosPorConjunto() {
   }).join('');
 }
 
-function crearTareaEventual() {
+let _creandoEventual = false; // evita doble clic mientras se piden las referencias al servidor
+
+async function crearTareaEventual() {
+  if (_creandoEventual) return;
   const conjuntosSeleccionados = [...document.querySelectorAll('#multi-conjunto-checks input:checked')].map(i => i.value);
   const nombre = document.getElementById('nueva-eve-nombre').value.trim();
   const desc = document.getElementById('nueva-eve-desc').value.trim();
@@ -244,9 +247,16 @@ function crearTareaEventual() {
   const reg = fechaCortaCol();
   const usuario = usuarioActual();
 
+  // La referencia (MOK-001…) la entrega la base de datos, una por conjunto. Si falla para alguno
+  // (sin conexión, conjunto sin código), ese conjunto no se crea y se avisa el motivo real.
+  _creandoEventual = true;
+  toast('⏳ Creando tarea…');
   const idsCreados = [];
-  conjuntosSeleccionados.forEach(conj => {
-    const id = siguienteIdEventual();
+  const fallidos = [];
+  for (const conj of conjuntosSeleccionados) {
+    const pedido = await pedirIdEventual(conj);
+    if (pedido.error) { fallidos.push(`${conj}: ${pedido.error}`); continue; }
+    const id = pedido.id;
     let encargado;
     if (esStaff()) {
       const sel = document.querySelector(`#encargado-por-conjunto select[data-conjunto-encargado="${conj}"]`);
@@ -263,16 +273,33 @@ function crearTareaEventual() {
       reg, vence, coms: []
     });
     idsCreados.push(id);
-  });
+  }
 
-  clearForm('form-nueva-eve');
-  closeOv('modal-nueva-eve');
+  // Guardado individual: solo estas tareas nuevas, ninguna otra se toca. Si alguna no queda
+  // guardada en el servidor, se saca de la lista local para no mostrar algo que no existe.
+  const resultados = await Promise.all(idsCreados.map(id => crearTareaEventualEnSupabase(id)));
+  const guardados = idsCreados.filter((id, i) => resultados[i]);
+  idsCreados.filter((id, i) => !resultados[i]).forEach(id => {
+    const t = DATA.tareasEve.find(x => x.id === id);
+    fallidos.push(`${t ? t.conj : id}: no se guardó en el servidor`);
+    DATA.tareasEve = DATA.tareasEve.filter(x => x.id !== id);
+  });
+  _creandoEventual = false;
+
   guardarLocal();
-  idsCreados.forEach(id => guardarTareaEventualEnSupabase(id)); // guardado individual: solo estas tareas nuevas, ninguna otra se toca
+  if (guardados.length) {
+    clearForm('form-nueva-eve');
+    closeOv('modal-nueva-eve');
+  }
   tomarSnapshotEventuales(); // tarea nueva sí debe aparecer de inmediato
   renderEventuales();
   updBadge();
-  toast(`✓ Tarea creada en ${conjuntosSeleccionados.length} conjunto(s)`);
+  if (fallidos.length) {
+    // El formulario queda abierto (si nada se creó) para reintentar sin volver a escribir todo
+    toast(`${guardados.length ? `✓ Creada: ${guardados.join(', ')}. ` : ''}⚠️ No se creó en: ${fallidos.join(' · ')}`, 9000);
+  } else {
+    toast(`✓ Tarea creada: ${guardados.join(', ')}`);
+  }
 }
 
 // ─── DETALLE / CAMBIO DE ESTADO ───────────────────────────────

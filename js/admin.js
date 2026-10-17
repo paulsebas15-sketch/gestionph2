@@ -150,7 +150,7 @@ function renderFilasConjuntos() {
       if (c.deleted) return;
       filas.push(`
         <tr>
-          <td style="font-size:10px"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${c.c || '#4a7c59'};margin-right:5px"></span>${c.n}</td>
+          <td style="font-size:10px"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${c.c || '#4a7c59'};margin-right:5px"></span>${c.n} <span style="font-size:8px;color:${c.codigo ? 'var(--txs)' : 'var(--rj)'}">${c.codigo || '⚠️ sin código'}</span></td>
           <td style="font-size:9px;color:var(--txs)">${tipo === 'def' ? 'Def' : 'Prov'}</td>
           <td style="font-size:10px">${c.del}</td>
           <td><button class="btn btn-sm btn-g" style="font-size:9px;padding:2px 6px" onclick="abrirEditarConjunto('${tipo}','${c.n}')">✏️</button></td>
@@ -185,6 +185,7 @@ function abrirNuevoConjunto() {
   document.getElementById('conj-btn-eliminar').classList.add('oculto');
   document.getElementById('conj-edit-nombre').value = '';
   document.getElementById('conj-nombre').value = '';
+  document.getElementById('conj-codigo').value = '';
   document.getElementById('conj-tipo').value = 'def';
   poblarSelectDelegados('');
   poblarSwatchesColor(PALETA_CONJUNTOS[0]);
@@ -199,6 +200,7 @@ function abrirEditarConjunto(tipoActual, nombreActual) {
   document.getElementById('conj-btn-eliminar').classList.remove('oculto');
   document.getElementById('conj-edit-nombre').value = nombreActual;
   document.getElementById('conj-nombre').value = c.n;
+  document.getElementById('conj-codigo').value = c.codigo || '';
   document.getElementById('conj-tipo').value = tipoActual;
   poblarSelectDelegados(c.del);
   poblarSwatchesColor(c.c);
@@ -209,6 +211,16 @@ function guardarConjunto() {
   const nombreActual = document.getElementById('conj-edit-nombre').value;
   const nuevoNombre = document.getElementById('conj-nombre').value.trim();
   if (!nuevoNombre) { toast('El nombre es obligatorio'); return; }
+  // Código del conjunto: prefijo de las referencias de tareas nuevas (MOK-001…), lo usa la base
+  // de datos para numerar (nuevo_id_eventual). Único entre TODOS los conjuntos, incluso eliminados.
+  const codigo = document.getElementById('conj-codigo').value.trim().toUpperCase();
+  if (!/^[A-Z]{2,4}$/.test(codigo)) { toast('El código debe tener de 2 a 4 letras (ej. MOK)'); return; }
+  const todos = [...(DATA.conjuntos.def || []), ...(DATA.conjuntos.pro || [])];
+  const duenoCodigo = todos.find(x => x.codigo === codigo && x.n !== nombreActual);
+  if (duenoCodigo) { toast(`El código ${codigo} ya lo usa ${duenoCodigo.n}`); return; }
+  const actual = nombreActual ? conjuntoPorNombre(nombreActual) : null;
+  if (actual && actual.codigo && actual.codigo !== codigo &&
+      !confirm(`¿Cambiar el código de ${actual.codigo} a ${codigo}?\n\nLas tareas ya creadas conservan su referencia (${actual.codigo}-…); solo las nuevas usarán ${codigo}-001, ${codigo}-002…`)) return;
   const tipo = document.getElementById('conj-tipo').value;
   const delegado = document.getElementById('conj-delegado').value;
   const color = document.getElementById('conj-color').value || PALETA_CONJUNTOS[0];
@@ -231,6 +243,7 @@ function guardarConjunto() {
     c.n = nuevoNombre;
     c.del = delegado || '—';
     c.c = color;
+    c.codigo = codigo;
     if (tipo !== tipoAnterior) {
       DATA.conjuntos[tipoAnterior] = DATA.conjuntos[tipoAnterior].filter(x => x !== c);
       DATA.conjuntos[tipo] = DATA.conjuntos[tipo] || [];
@@ -245,7 +258,7 @@ function guardarConjunto() {
   } else {
     // Nuevo conjunto
     DATA.conjuntos[tipo] = DATA.conjuntos[tipo] || [];
-    const nuevoConjunto = { n: nuevoNombre, del: delegado || '—', c: color, eval: {} };
+    const nuevoConjunto = { n: nuevoNombre, del: delegado || '—', c: color, codigo, eval: {} };
     DATA.conjuntos[tipo].push(nuevoConjunto);
     // Slots vacíos solo en memoria local (para que el conjunto se vea listo de inmediato en
     // Recurrentes) — NO se pre-insertan en Supabase, cada casilla se crea sola al primer toque real.

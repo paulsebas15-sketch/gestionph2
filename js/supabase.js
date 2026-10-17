@@ -5,7 +5,16 @@
 
 const SB = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-function actualizarIndicadorSync(estado) {
+// Mensaje para el usuario según el error de Supabase: sin internet vs. rechazo del servidor
+// (permiso, dato inválido…). Antes todo decía "revisa tu conexión", y un rechazo por permisos
+// parecía un problema de internet del usuario (caso Ángel, oct 2026).
+function mensajeErrorGuardado(detalle) {
+  const sinRed = !navigator.onLine || /failed to fetch|network|load failed|fetch/i.test(detalle || '');
+  if (!detalle || sinRed) return '⚠️ No se pudo guardar en el servidor — revisa tu conexión e inténtalo de nuevo';
+  return `⚠️ El servidor rechazó el guardado: ${detalle}. Avisa a Staff si se repite.`;
+}
+
+function actualizarIndicadorSync(estado, detalle) {
   if (typeof renderSyncIndicator === 'function') renderSyncIndicator(estado);
   // Protección offline: cada función de guardado individual llama aquí con 'offline' si falló
   // (sin internet) o 'synced' si un guardado posterior sí llegó — así se sabe en todo momento
@@ -19,7 +28,7 @@ function actualizarIndicadorSync(estado) {
     // un guardado que fallara en el servidor podía pasar completamente desapercibido para quien
     // lo hizo (ver caso real: evento de calendario rechazado por Supabase, nadie se enteró hasta
     // que otro usuario no lo vio). Ahora avisa siempre con un toast visible.
-    if (typeof toast === 'function') toast('⚠️ No se pudo guardar en el servidor — revisa tu conexión e inténtalo de nuevo', 5000);
+    if (typeof toast === 'function') toast(mensajeErrorGuardado(detalle), detalle ? 8000 : 5000);
   }
   else if (estado === 'synced') localStorage.removeItem(PENDIENTE_OFFLINE_KEY);
 }
@@ -161,7 +170,7 @@ async function cargarTodoDesdeSupabase() {
   // conjuntos
   const conjuntos = { def: [], pro: [] };
   (conjuntosRes.data || []).forEach(c => {
-    const obj = { n: c.nombre, del: c.delegado, c: c.color, eval: c.eval || {}, cartera: c.cartera || {}, deleted: c.deleted };
+    const obj = { n: c.nombre, del: c.delegado, c: c.color, codigo: c.codigo || null, eval: c.eval || {}, cartera: c.cartera || {}, deleted: c.deleted };
     if (c.tipo === 'Definitivos') conjuntos.def.push(obj); else conjuntos.pro.push(obj);
   });
 
@@ -456,7 +465,7 @@ async function sincronizarAsignacionConjunto(conjuntoNombre, delegadoAnteriorNom
 // referencian, sin que la app tenga que reenviar esos datos.
 // ═══════════════════════════════════════════════════════════════
 function filaConjunto(c, tipo) {
-  return { tipo, delegado: c.del, color: c.c, eval: c.eval || {}, cartera: c.cartera || {}, deleted: !!c.deleted };
+  return { tipo, delegado: c.del, color: c.c, codigo: c.codigo || null, eval: c.eval || {}, cartera: c.cartera || {}, deleted: !!c.deleted };
 }
 
 async function guardarConjuntoEnSupabase(nombreAnterior, nombreNuevo, c, tipo) {
@@ -517,10 +526,34 @@ async function guardarTareaEventualEnSupabase(id) {
   const { error } = await SB.from('tareas_eventuales').upsert({ id: t.id, ...filaEventual(t) });
   if (error) {
     console.error('Error guardando tarea eventual en Supabase:', error.message);
-    actualizarIndicadorSync('offline');
+    actualizarIndicadorSync('offline', error.message);
     return;
   }
   actualizarIndicadorSync('synced');
+}
+
+// Referencia de tarea nueva (MOK-001, CAM-014…): la entrega la base de datos con un contador por
+// conjunto — antes la calculaba la app con solo las tareas visibles y a los delegados les salía
+// repetida (ver supabase_ids_por_conjunto.sql). Retorna { id } o { error }.
+async function pedirIdEventual(conjunto) {
+  const { data, error } = await SB.rpc('nuevo_id_eventual', { p_conjunto: conjunto });
+  if (error || !data) return { error: error ? error.message : 'sin respuesta' };
+  return { id: data };
+}
+
+// Tarea NUEVA: insert (no upsert) — si por cualquier motivo la referencia ya existiera, falla en
+// vez de sobrescribir en silencio la tarea de otra persona. Retorna true si quedó guardada.
+async function crearTareaEventualEnSupabase(id) {
+  const t = DATA.tareasEve.find(t => t.id === id);
+  if (!t) return false;
+  const { error } = await SB.from('tareas_eventuales').insert({ id: t.id, ...filaEventual(t) });
+  if (error) {
+    console.error('Error creando tarea eventual en Supabase:', error.message);
+    actualizarIndicadorSync('offline', error.message);
+    return false;
+  }
+  actualizarIndicadorSync('synced');
+  return true;
 }
 
 function programarGuardadoEventual(id) {
@@ -739,7 +772,7 @@ async function guardarTareaAVEnSupabase(id) {
 // GUARDADO QUIRÚRGICO — eventos de calendario (eventos_calendario)
 // id ya se genera en el cliente (EV-XXX) — upsert sirve para crear y editar por igual.
 // ═══════════════════════════════════════════════════════════════
-async function guardarEventoEnSupabase(id) {
+async function guardarEventoEnSupabase(id, esNuevo = false) {
   const e = DATA.eventosCalendario.find(e => e.id === id);
   if (!e) return;
   const row = {
@@ -747,13 +780,24 @@ async function guardarEventoEnSupabase(id) {
     hora_fin: e.horaFin || null, modalidad: e.modalidad || null, lugar_tipo: e.lugarTipo || null, lugar_texto: e.lugarTexto || null,
     descripcion: e.descripcion, participantes: e.participantes || [], creado_por: e.creadoPor
   };
-  const { error } = await SB.from('eventos_calendario').upsert(row);
+  // Evento nuevo → insert (nunca sobrescribe otro); edición → upsert como siempre
+  const { error } = esNuevo
+    ? await SB.from('eventos_calendario').insert(row)
+    : await SB.from('eventos_calendario').upsert(row);
   if (error) {
     console.error('Error guardando evento de calendario en Supabase:', error.message);
-    actualizarIndicadorSync('offline');
+    actualizarIndicadorSync('offline', error.message);
     return;
   }
   actualizarIndicadorSync('synced');
+}
+
+// Número de evento nuevo (EV-XXX): lo entrega la base de datos — un delegado no ve los eventos
+// de otros conjuntos, así que calcularlo en la app podía repetir números.
+async function pedirIdEvento() {
+  const { data, error } = await SB.rpc('nuevo_id_evento');
+  if (error || !data) return { error: error ? error.message : 'sin respuesta' };
+  return { id: data };
 }
 
 async function eliminarEventoEnSupabase(id) {

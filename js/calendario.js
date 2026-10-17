@@ -276,7 +276,7 @@ function abrirEditarEvento(id) {
 // Al CREAR, si se marcan varios conjuntos se crea una copia del evento por cada uno (mismo
 // patrón que "Nueva tarea eventual" multi-conjunto). Al EDITAR, un evento ya existente solo
 // puede tener un conjunto — si marcas varios al editar, se usa el primero.
-function guardarEvento() {
+async function guardarEvento() {
   const tipo = document.getElementById('ev-tipo').value;
   const esMasivo = TIPOS_EVENTO_MASIVO.includes(tipo);
   const conMod = TIPOS_EVENTO_CON_MODALIDAD.includes(tipo);
@@ -351,6 +351,7 @@ function guardarEvento() {
   const usuario = usuarioActual();
 
   const idsGuardados = [];
+  const nuevos = new Set(); // ids creados ahora (se guardan con insert, nunca sobrescriben otro evento)
   if (editId) {
     const e = DATA.eventosCalendario.find(e => e.id === editId);
     if (!e || !puedeEditarEvento(e)) { toast('No puedes editar este evento'); return; }
@@ -363,7 +364,10 @@ function guardarEvento() {
     if (tipo === 'Reunión de consejo' && conjunto) sincronizarFechaConsejo(conjunto, fecha);
     toast('✓ Evento actualizado');
   } else if (esMasivo) {
-    const id = siguienteIdEvento();
+    const pedido = await pedirIdEvento(); // el número lo entrega la base de datos (nunca se repite)
+    if (pedido.error) { toast(`⚠️ No se pudo crear el evento: ${pedido.error}`, 8000); return; }
+    const id = pedido.id;
+    nuevos.add(id);
     DATA.eventosCalendario.push({
       id, tipo, conjunto: conjuntoMasivo, titulo, fecha, hora, horaFin, descripcion, participantes,
       modalidad, lugarTipo: lugarTipoRadio, lugarTexto: lugarTipoRadio === 'externo' ? lugarTexto : null,
@@ -372,8 +376,12 @@ function guardarEvento() {
     idsGuardados.push(id);
     toast('✓ Evento creado');
   } else {
-    conjuntosMarcados.forEach(conjunto => {
-      const id = siguienteIdEvento();
+    const fallidos = [];
+    for (const conjunto of conjuntosMarcados) {
+      const pedido = await pedirIdEvento();
+      if (pedido.error) { fallidos.push(`${conjunto}: ${pedido.error}`); continue; }
+      const id = pedido.id;
+      nuevos.add(id);
       DATA.eventosCalendario.push({
         id, tipo, conjunto, titulo, fecha, hora, horaFin, descripcion, participantes: [],
         modalidad, lugarTipo: null, lugarTexto: null,
@@ -381,13 +389,15 @@ function guardarEvento() {
       });
       idsGuardados.push(id);
       if (tipo === 'Reunión de consejo') sincronizarFechaConsejo(conjunto, fecha);
-    });
-    toast(`✓ Evento creado en ${conjuntosMarcados.length} conjunto(s)`);
+    }
+    if (fallidos.length) toast(`⚠️ No se creó en: ${fallidos.join(' · ')}`, 8000);
+    else toast(`✓ Evento creado en ${conjuntosMarcados.length} conjunto(s)`);
+    if (!idsGuardados.length) return;
   }
 
   closeOv('modal-evento');
   guardarLocal();
-  idsGuardados.forEach(id => guardarEventoEnSupabase(id)); // guardado individual: solo estos eventos, ninguno más se toca
+  idsGuardados.forEach(id => guardarEventoEnSupabase(id, nuevos.has(id))); // guardado individual: solo estos eventos, ninguno más se toca
   renderCalendario();
 }
 
