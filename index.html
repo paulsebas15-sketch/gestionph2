@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>GestiónPH v2.0 — A&V Victoria Pineda</title>
-<link rel="stylesheet" href="css/estilos.css?v=20261014a">
+<link rel="stylesheet" href="css/estilos.css?v=20261017a">
 <!-- Supabase (datos + fotos) -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <!-- jsPDF para informes -->
@@ -369,6 +369,10 @@
         <label class="form-label">Nombre *</label>
         <input class="form-input" id="conj-nombre" placeholder="Nombre del conjunto">
       </div>
+      <div class="form-group">
+        <label class="form-label">Código * <span style="font-size:9px;color:var(--txs)">(3 letras, único — va en la referencia de cada tarea nueva, ej. MOK-001)</span></label>
+        <input class="form-input" id="conj-codigo" maxlength="4" placeholder="Ej. MOK" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z]/g,'')">
+      </div>
       <div class="form-row">
         <div class="form-group">
           <label class="form-label">Tipo</label>
@@ -657,24 +661,24 @@
      GitHub, cambiá esta fecha (una sola vez, se puede reemplazar en todos con buscar/reemplazar)
      para forzar que el navegador de TODOS —Staff y delegados— baje la versión nueva, sin que
      nadie tenga que limpiar caché manualmente nunca más. -->
-<script src="js/config.js?v=20261014a"></script>
-<script src="js/datos.js?v=20261014a"></script>
-<script src="js/supabase.js?v=20261014a"></script>
-<script src="js/auth.js?v=20261014a"></script>
-<script src="js/ui.js?v=20261014a"></script>
-<script src="js/calendario.js?v=20261014a"></script>
-<script src="js/horarios.js?v=20261014a"></script>
-<script src="js/recurrentes.js?v=20261014a"></script>
-<script src="js/dashboard.js?v=20261014a"></script>
-<script src="js/eventuales.js?v=20261014a"></script>
-<script src="js/aprobaciones.js?v=20261014a"></script>
-<script src="js/validaciones.js?v=20261014a"></script>
-<script src="js/evaluacion.js?v=20261014a"></script>
-<script src="js/rendimiento.js?v=20261014a"></script>
-<script src="js/informes.js?v=20261014a"></script>
-<script src="js/analitica.js?v=20261014a"></script>
-<script src="js/tareasAV.js?v=20261014a"></script>
-<script src="js/admin.js?v=20261014a"></script>
-<script src="js/main.js?v=20261014a"></script>
+<script src="js/config.js?v=20261017a"></script>
+<script src="js/datos.js?v=20261017a"></script>
+<script src="js/supabase.js?v=20261017a"></script>
+<script src="js/auth.js?v=20261017a"></script>
+<script src="js/ui.js?v=20261017a"></script>
+<script src="js/calendario.js?v=20261017a"></script>
+<script src="js/horarios.js?v=20261017a"></script>
+<script src="js/recurrentes.js?v=20261017a"></script>
+<script src="js/dashboard.js?v=20261017a"></script>
+<script src="js/eventuales.js?v=20261017a"></script>
+<script src="js/aprobaciones.js?v=20261017a"></script>
+<script src="js/validaciones.js?v=20261017a"></script>
+<script src="js/evaluacion.js?v=20261017a"></script>
+<script src="js/rendimiento.js?v=20261017a"></script>
+<script src="js/informes.js?v=20261017a"></script>
+<script src="js/analitica.js?v=20261017a"></script>
+<script src="js/tareasAV.js?v=20261017a"></script>
+<script src="js/admin.js?v=20261017a"></script>
+<script src="js/main.js?v=20261017a"></script>
 </body>
 </html>
